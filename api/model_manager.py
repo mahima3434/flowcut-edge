@@ -12,14 +12,14 @@ logger = logging.getLogger("flowcut-edge")
 
 
 class ModelManager:
-    """Manages VILA-2 (vision) and Nemotron-Mini (text) models."""
+    """Manages Phi-3.5 Vision and Nemotron-Mini (text) models."""
 
     def __init__(self):
         self.text_model = None
         self.text_tokenizer = None
         self.vision_model = None
         self.vision_processor = None
-        self.device = "cuda"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.text_model_name = ""
         self.vision_model_name = ""
         self._loaded = False
@@ -54,11 +54,17 @@ class ModelManager:
                 self.text_model_name,
                 trust_remote_code=True,
             )
+            load_kwargs = dict(
+                trust_remote_code=True,
+            )
+            if self.device == "cuda":
+                load_kwargs["torch_dtype"] = torch.bfloat16
+                load_kwargs["device_map"] = "auto"
+            else:
+                load_kwargs["torch_dtype"] = torch.float32
             self.text_model = AutoModelForCausalLM.from_pretrained(
                 self.text_model_name,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-                trust_remote_code=True,
+                **load_kwargs,
             )
             logger.info("Text model loaded successfully")
         except Exception as e:
@@ -80,12 +86,18 @@ class ModelManager:
             )
             config._attn_implementation = "eager"
 
+            vision_kwargs = dict(
+                config=config,
+                trust_remote_code=True,
+            )
+            if self.device == "cuda":
+                vision_kwargs["torch_dtype"] = torch.bfloat16
+                vision_kwargs["device_map"] = "auto"
+            else:
+                vision_kwargs["torch_dtype"] = torch.float32
             self.vision_model = AutoModelForCausalLM.from_pretrained(
                 self.vision_model_name,
-                config=config,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-                trust_remote_code=True,
+                **vision_kwargs,
             )
             logger.info("Vision model loaded successfully")
         except Exception as e:

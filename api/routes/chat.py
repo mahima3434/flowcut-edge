@@ -1,6 +1,6 @@
 """
 OpenAI-compatible /v1/chat/completions endpoint.
-Routes to VILA-2 (vision) or Nemotron-Mini (text) based on message content.
+Routes to Phi-3.5 Vision or Nemotron-Mini (text) based on message content.
 """
 
 import time
@@ -95,17 +95,17 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
     messages = [m.model_dump(exclude_none=True) for m in req.messages]
 
     # Route to vision or text model
-    use_vision = _has_images(req.messages) or req.model.startswith("vila")
+    use_vision = _has_images(req.messages) or req.model.startswith("phi-3")
 
     try:
         if use_vision:
-            logger.info("Routing to VILA-2 (vision) — %d messages", len(messages))
+            logger.info("Routing to Phi-3.5 Vision — %d messages", len(messages))
             result = await manager.generate_vision(
                 messages=messages,
                 max_tokens=req.max_tokens or 2048,
                 temperature=req.temperature or 0.7,
             )
-            model_name = "vila-2-8b"
+            model_name = "phi-3.5-vision"
         else:
             logger.info("Routing to Nemotron-Mini (text) — %d messages", len(messages))
             tools_raw = None

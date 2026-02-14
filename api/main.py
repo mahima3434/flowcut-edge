@@ -20,7 +20,11 @@ logger = logging.getLogger("flowcut-edge")
 # Model paths (set by docker-compose or setup.sh)
 TEXT_MODEL = os.getenv("TEXT_MODEL", "nvidia/Nemotron-Mini-4B-Instruct")
 VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
-DEVICE = os.getenv("DEVICE", "cuda")
+
+# Auto-detect CUDA, fall back to CPU
+import torch as _torch
+_default_device = "cuda" if _torch.cuda.is_available() else "cpu"
+DEVICE = os.getenv("DEVICE", _default_device)
 
 
 @asynccontextmanager

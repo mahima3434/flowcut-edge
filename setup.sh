@@ -38,7 +38,7 @@ fi
 TOTAL_MEM=$(free -g | awk '/^Mem:/{print $2}')
 log "Total memory: ${TOTAL_MEM}GB"
 if (( TOTAL_MEM < 30 )); then
-    warn "Low memory (${TOTAL_MEM}GB). VILA-2 8B + Nemotron-Mini 4B need ~20GB+"
+    warn "Low memory (${TOTAL_MEM}GB). Phi-3.5 Vision + Nemotron-Mini 4B need ~20GB+"
 fi
 
 # ── Install system deps ────────────────────────────────────────────
@@ -89,6 +89,41 @@ if [[ ! -d ".venv" ]]; then
 fi
 source .venv/bin/activate
 pip install --quiet --upgrade pip
+
+# ── Install PyTorch (Jetson needs NVIDIA's wheel, not PyPI) ─────────
+if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    log "PyTorch with CUDA already installed, skipping"
+else
+    ARCH=$(uname -m)
+    if [[ "$ARCH" == "aarch64" ]]; then
+        log "Jetson (aarch64) detected — installing NVIDIA PyTorch wheel..."
+        # JetPack 6.x / L4T R36 ships CUDA 12.x
+        # Official NVIDIA wheel index for Jetson:
+        TORCH_URL="https://developer.download.nvidia.com/compute/redist/jp/v60/pytorch/torch-2.3.0a0+ebedce2.nv24.02-cp310-cp310-linux_aarch64.whl"
+        # Try the NVIDIA pip index first (covers multiple JetPack versions)
+        pip install --quiet torch torchvision \
+            --extra-index-url https://pypi.jetson-ai-lab.dev \
+            2>/dev/null \
+        || pip install --quiet "$TORCH_URL" \
+            2>/dev/null \
+        || {
+            error "Could not install Jetson PyTorch automatically."
+            error "Please install manually from: https://forums.developer.nvidia.com/t/pytorch-for-jetson/"
+            error "Then re-run this script."
+            exit 1
+        }
+    else
+        log "x86_64 detected — installing PyTorch from PyPI..."
+        pip install --quiet torch
+    fi
+    # Verify
+    if python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')" 2>/dev/null; then
+        log "PyTorch installed successfully"
+    else
+        warn "PyTorch installed but CUDA may not be available"
+    fi
+fi
+
 pip install --quiet -r requirements.txt
 
 log ""
