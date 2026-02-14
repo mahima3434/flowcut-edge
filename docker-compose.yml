@@ -1,0 +1,45 @@
+# ============================================================================
+# FlowCut Edge — Docker Compose for NVIDIA Jetson
+# ============================================================================
+# Uses NVIDIA's jetson-containers base image for optimal Jetson performance.
+# Run: docker compose up -d
+# ============================================================================
+
+services:
+  flowcut-edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flowcut-edge
+    
+    # NVIDIA GPU access
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - TEXT_MODEL=nvidia/Nemotron-Mini-4B-Instruct
+      - VISION_MODEL=Efficient-Large-Model/VILA1.5-8b
+      - DEVICE=cuda
+      - HF_HOME=/cache/huggingface
+      - TRANSFORMERS_CACHE=/cache/huggingface/hub
+    
+    ports:
+      - "8000:8000"
+    
+    volumes:
+      # Persist downloaded models
+      - model-cache:/cache
+    
+    # Restart on crash
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s  # Models take a few minutes to load
+
+volumes:
+  model-cache:
+    driver: local
