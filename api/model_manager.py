@@ -68,18 +68,24 @@ class ModelManager:
     def _load_vision_model(self):
         """Load Phi-3.5 Vision for vision-language tasks."""
         try:
-            from transformers import AutoModelForCausalLM, AutoProcessor
+            from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig
 
             self.vision_processor = AutoProcessor.from_pretrained(
                 self.vision_model_name,
                 trust_remote_code=True,
             )
+            config = AutoConfig.from_pretrained(
+                self.vision_model_name,
+                trust_remote_code=True,
+            )
+            config._attn_implementation = "eager"
+
             self.vision_model = AutoModelForCausalLM.from_pretrained(
                 self.vision_model_name,
+                config=config,
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
                 trust_remote_code=True,
-                attn_implementation="eager",  # Skip FlashAttention2 requirement
             )
             logger.info("Vision model loaded successfully")
         except Exception as e:
