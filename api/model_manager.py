@@ -79,6 +79,7 @@ class ModelManager:
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
                 trust_remote_code=True,
+                attn_implementation="eager",  # Skip FlashAttention2 requirement
             )
             logger.info("Vision model loaded successfully")
         except Exception as e:
