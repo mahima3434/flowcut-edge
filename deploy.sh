@@ -53,8 +53,8 @@ os.makedirs(cache, exist_ok=True)
 print('Downloading Nemotron-Mini 4B...')
 snapshot_download('nvidia/Nemotron-Mini-4B-Instruct', cache_dir=cache)
 
-print('Downloading VILA 1.5 8B...')
-snapshot_download('Efficient-Large-Model/VILA1.5-8b', cache_dir=cache)
+print('Downloading Phi-3.5 Vision...')
+snapshot_download('microsoft/Phi-3.5-vision-instruct', cache_dir=cache)
 
 print('Done!')
 "

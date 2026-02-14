@@ -66,18 +66,17 @@ class ModelManager:
             raise
 
     def _load_vision_model(self):
-        """Load VILA for vision-language tasks."""
+        """Load Phi-3.5 Vision for vision-language tasks."""
         try:
-            # VILA uses its own loading mechanism
-            from transformers import AutoModel, AutoProcessor
+            from transformers import AutoModelForCausalLM, AutoProcessor
 
             self.vision_processor = AutoProcessor.from_pretrained(
                 self.vision_model_name,
                 trust_remote_code=True,
             )
-            self.vision_model = AutoModel.from_pretrained(
+            self.vision_model = AutoModelForCausalLM.from_pretrained(
                 self.vision_model_name,
-                torch_dtype=torch.float16,
+                torch_dtype=torch.bfloat16,
                 device_map="auto",
                 trust_remote_code=True,
             )
@@ -193,16 +192,22 @@ class ModelManager:
 
         prompt = "\n".join(text_parts) if text_parts else "Describe this image."
 
-        # Process with VILA
+        # Build Phi-3.5 Vision prompt with image placeholders
+        image_placeholders = "".join(
+            [f"<|image_{i+1}|>\n" for i in range(len(images))]
+        ) if images else ""
+        full_prompt = f"{image_placeholders}{prompt}"
+
+        # Process with Phi-3.5 Vision
         if images:
             inputs = self.vision_processor(
-                text=prompt,
+                text=full_prompt,
                 images=images,
                 return_tensors="pt",
             ).to(self.device)
         else:
             inputs = self.vision_processor(
-                text=prompt,
+                text=full_prompt,
                 return_tensors="pt",
             ).to(self.device)
 
@@ -212,10 +217,13 @@ class ModelManager:
                 max_new_tokens=max_tokens,
                 temperature=temperature if temperature > 0 else None,
                 do_sample=temperature > 0,
+                eos_token_id=self.vision_processor.tokenizer.eos_token_id,
             )
 
+        # Decode only new tokens
+        new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
         response_text = self.vision_processor.decode(
-            output_ids[0], skip_special_tokens=True
+            new_tokens, skip_special_tokens=True
         )
 
         return {
@@ -252,9 +260,9 @@ class ModelManager:
             })
         if self.vision_model:
             models.append({
-                "id": "vila-2-8b",
+                "id": "phi-3.5-vision",
                 "object": "model",
-                "owned_by": "nvidia",
+                "owned_by": "microsoft",
                 "type": "vision",
             })
         return models

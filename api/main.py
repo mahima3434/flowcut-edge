@@ -19,7 +19,7 @@ logger = logging.getLogger("flowcut-edge")
 
 # Model paths (set by docker-compose or setup.sh)
 TEXT_MODEL = os.getenv("TEXT_MODEL", "nvidia/Nemotron-Mini-4B-Instruct")
-VISION_MODEL = os.getenv("VISION_MODEL", "Efficient-Large-Model/VILA1.5-8b")
+VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
 DEVICE = os.getenv("DEVICE", "cuda")
 
 
