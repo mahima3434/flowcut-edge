@@ -43,8 +43,13 @@ class ModelManager:
         try:
             logger.info("Loading text model: %s", self.text_model_name)
             self._load_text_model()
-            logger.info("Loading vision model: %s", self.vision_model_name)
-            self._load_vision_model()
+            
+            if self.vision_model_name and self.vision_model_name.lower() not in ("none", "disabled", "false", ""):
+                logger.info("Loading vision model: %s", self.vision_model_name)
+                self._load_vision_model()
+            else:
+                logger.info("Vision model loading disabled by configuration")
+                
             self._loaded = True
             self.load_error = None
         except Exception as e:
@@ -173,6 +178,9 @@ class ModelManager:
         temperature: float = 0.7,
     ) -> Dict[str, Any]:
         """Generate vision-language completion."""
+        if not self.vision_model:
+            raise RuntimeError("Vision model is disabled or not loaded.")
+            
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None,

@@ -18,6 +18,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - TEXT_MODEL=nvidia/Nemotron-Mini-4B-Instruct
       - VISION_MODEL=microsoft/Phi-3.5-vision-instruct
+      # To disable vision model (save memory/startup time): - VISION_MODEL=disabled
       - DEVICE=cuda
       - HF_HOME=/cache/huggingface
       - TRANSFORMERS_CACHE=/cache/huggingface/hub
