@@ -114,19 +114,20 @@ class ModelManager:
     ) -> str:
         """Synchronous generation for LLaVA-NeXT."""
         try:
-            # LLaVA-NeXT uses <image> token in the conversation content
+            # Build conversation with structured content parts
+            # LLaVA-NeXT processor needs {"type": "image"} parts,
+            # NOT raw "<image>" strings, to correctly insert image tokens.
             if images:
-                # Insert one <image> tag per image before the text
-                image_tags = "\n".join(["<image>"] * len(images))
-                user_content = f"{image_tags}\n{text}"
+                content_parts = []
+                for _ in images:
+                    content_parts.append({"type": "image"})
+                content_parts.append({"type": "text", "text": text})
+
+                conversation = [{"role": "user", "content": content_parts}]
             else:
-                user_content = text
+                conversation = [{"role": "user", "content": text}]
 
-            conversation = [
-                {"role": "user", "content": user_content},
-            ]
-
-            # Apply chat template
+            # apply_chat_template on the processor handles image token insertion
             prompt = self._processor.apply_chat_template(
                 conversation, add_generation_prompt=True
             )
