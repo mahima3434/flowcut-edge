@@ -30,7 +30,7 @@ OUTPUT_DIR = os.getenv("VIDEO_OUTPUT_DIR", "/tmp/flowcut-edge/videos")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Model variant: "2B/post-trained" (fast, edge-friendly), "2B/distilled" (fastest, text2world only), "14B/post-trained"
-DEFAULT_MODEL = os.getenv("COSMOS_MODEL", "2B/post-trained")
+DEFAULT_MODEL = os.getenv("COSMOS_MODEL", "2B/pre-trained")
 
 # Timeout for inference (seconds) — 2B model is much faster than 14B
 INFERENCE_TIMEOUT = int(os.getenv("COSMOS_TIMEOUT", "600"))

@@ -100,7 +100,7 @@ FlowCut Desktop App
 |----------|---------|-------------|
 | `TEXT_MODEL` | `nvidia/Nemotron-Mini-4B-Instruct` | HF text model ID |
 | `VISION_MODEL` | `microsoft/Phi-3.5-vision-instruct` | HF vision model ID |
-| `VIDEO_MODEL` | `2B/post-trained` | Cosmos model variant (`2B/post-trained`, `2B/distilled`, `14B/post-trained`) |
+| `VIDEO_MODEL` | `2B/pre-trained` | Cosmos model variant (`2B/pre-trained`, `2B/distilled`, `14B/pre-trained`) |
 | `COSMOS_DIR` | `~/cosmos-predict2.5` | Path to cloned cosmos-predict2.5 repo |
 | `DEVICE` | auto-detect | `cuda` or `cpu` |
 
