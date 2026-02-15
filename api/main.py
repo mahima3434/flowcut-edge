@@ -21,7 +21,7 @@ logger = logging.getLogger("flowcut-edge")
 # Model paths (set by docker-compose or setup.sh)
 TEXT_MODEL = os.getenv("TEXT_MODEL", "nvidia/Nemotron-Mini-4B-Instruct")
 VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
-VIDEO_MODEL = os.getenv("VIDEO_MODEL", "nvidia/Cosmos-1.0-Diffusion-7B-Text2World")
+VIDEO_MODEL = os.getenv("VIDEO_MODEL", "Cosmos-1.0-Diffusion-7B-Text2World")
 
 # Auto-detect CUDA, fall back to CPU
 import torch as _torch
@@ -32,7 +32,7 @@ DEVICE = os.getenv("DEVICE", _default_device)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load models on startup, release on shutdown."""
-    logger.info("=== FlowCut Edge starting on NVIDIA Jetson ===")
+    logger.info("=== FlowCut Edge starting on NVIDIA GB10 ===")
     logger.info(f"Text model:   {TEXT_MODEL}")
     logger.info(f"Vision model: {VISION_MODEL}")
     logger.info(f"Video model:  {VIDEO_MODEL}")
@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="FlowCut Edge",
-    description="NVIDIA Jetson AI Service for FlowCut",
+    description="NVIDIA Edge AI Service for FlowCut (GB10 Blackwell)",
     version="0.1.0",
     lifespan=lifespan,
 )

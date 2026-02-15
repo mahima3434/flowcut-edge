@@ -62,18 +62,21 @@ print('Done!')
 # ── Get device IP ───────────────────────────────────────────────────
 DEVICE_IP=$(hostname -I | awk '{print $1}')
 
+# ── Cosmos video generation (optional) ──────────────────────────────
 log ""
+log "To enable NVIDIA Cosmos video generation:"
+log "  bash setup_cosmos.sh"
+log ""
+
 log "=========================================="
 log "  Deploy complete!"
 log "=========================================="
 log ""
 log "Start the server:"
-log "  cd $SCRIPT_DIR"
-log "  source .venv/bin/activate"
-log "  uvicorn api.main:app --host 0.0.0.0 --port 8000"
+log "  bash start.sh"
 log ""
 log "Or run in background:"
-log "  nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &"
+log "  nohup bash start.sh > server.log 2>&1 &"
 log ""
 log "Then in FlowCut, set API URL to:"
 log "  http://${DEVICE_IP}:8000/v1"

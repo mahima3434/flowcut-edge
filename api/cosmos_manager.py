@@ -1,85 +1,93 @@
 """
-NVIDIA Cosmos video generation manager.
-Handles text-to-video, image-to-video, and morph (first+last frame) generation
-using NVIDIA Cosmos-1.0-Diffusion-7B on the edge device.
+NVIDIA Cosmos video generation manager — uses official Cosmos repo + scripts.
+Runs inference via the Cosmos Python scripts (text2world, video2world)
+either natively or inside a jetson-container.
+
+Setup on the ASUS Ascent GX10:
+  git clone --recursive https://github.com/NVIDIA/Cosmos.git ~/Cosmos
+  cd ~/Cosmos
+  huggingface-cli login
+  PYTHONPATH=$(pwd) python3 cosmos1/scripts/download_diffusion.py --model_sizes 7B --model_types Text2World Video2World
 """
 
 import logging
 import asyncio
 import os
 import uuid
-import tempfile
+import subprocess
+import shutil
 from typing import Optional, Tuple
 from pathlib import Path
 
 logger = logging.getLogger("flowcut-edge")
 
-# Output directory for generated videos
+# Paths
+COSMOS_DIR = os.getenv("COSMOS_DIR", os.path.expanduser("~/Cosmos"))
+CHECKPOINT_DIR = os.path.join(COSMOS_DIR, "checkpoints")
 OUTPUT_DIR = os.getenv("VIDEO_OUTPUT_DIR", "/tmp/flowcut-edge/videos")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Model config
+DEFAULT_MODEL = os.getenv("COSMOS_MODEL", "Cosmos-1.0-Diffusion-7B-Text2World")
+
+# Common offload flags for memory-efficient inference on Jetson/edge
+OFFLOAD_FLAGS = [
+    "--offload_tokenizer",
+    "--offload_diffusion_transformer",
+    "--offload_text_encoder_model",
+    "--offload_prompt_upsampler",
+    "--offload_guardrail_models",
+]
+
 
 class CosmosVideoManager:
-    """Manages NVIDIA Cosmos model for on-device video generation."""
+    """Manages NVIDIA Cosmos for on-device video generation via official scripts."""
 
     def __init__(self):
-        self.pipeline = None
-        self.device = "cuda"
-        self.model_id = ""
+        self.cosmos_dir = COSMOS_DIR
+        self.checkpoint_dir = CHECKPOINT_DIR
+        self.model_name = DEFAULT_MODEL
         self._loaded = False
+        self.model_id = DEFAULT_MODEL
 
-    async def load_model(self, model_id: str, device: str = "cuda"):
-        """Load Cosmos diffusion pipeline."""
-        self.model_id = model_id
-        self.device = device
+    async def load_model(self, model_id: str = None, device: str = "cuda"):
+        """Verify Cosmos is installed and models are downloaded."""
+        if model_id:
+            self.model_name = model_id
+            self.model_id = model_id
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._load_sync)
+        await loop.run_in_executor(None, self._verify_setup)
 
-    def _load_sync(self):
-        """Synchronous model loading."""
-        import torch
+    def _verify_setup(self):
+        """Check that Cosmos repo and checkpoints exist."""
+        if not os.path.isdir(self.cosmos_dir):
+            raise FileNotFoundError(
+                f"Cosmos repo not found at {self.cosmos_dir}. "
+                "Run: git clone --recursive https://github.com/NVIDIA/Cosmos.git ~/Cosmos"
+            )
 
-        try:
-            # Try Cosmos-specific pipeline first
-            from diffusers import CosmosPipeline
-            self.pipeline = CosmosPipeline.from_pretrained(
-                self.model_id,
-                torch_dtype=torch.bfloat16,
-            ).to(self.device)
-            logger.info("Cosmos pipeline loaded (native)")
-            self._loaded = True
-            return
-        except (ImportError, Exception) as e:
-            logger.info("CosmosPipeline not available: %s, trying DiffusionPipeline", e)
+        t2w_script = os.path.join(
+            self.cosmos_dir, "cosmos1", "models", "diffusion", "inference", "text2world.py"
+        )
+        if not os.path.isfile(t2w_script):
+            raise FileNotFoundError(
+                f"Cosmos text2world script not found at {t2w_script}. "
+                "Make sure you cloned with --recursive."
+            )
 
-        try:
-            # Fallback: generic DiffusionPipeline (diffusers auto-detects)
-            from diffusers import DiffusionPipeline
-            self.pipeline = DiffusionPipeline.from_pretrained(
-                self.model_id,
-                torch_dtype=torch.bfloat16,
-                trust_remote_code=True,
-            ).to(self.device)
-            logger.info("Cosmos pipeline loaded (DiffusionPipeline)")
-            self._loaded = True
-            return
-        except Exception as e:
-            logger.warning("DiffusionPipeline failed: %s, trying SVD fallback", e)
+        model_dir = os.path.join(self.checkpoint_dir, self.model_name)
+        if not os.path.isdir(model_dir):
+            logger.warning(
+                "Model checkpoint not found at %s. Download with:\n"
+                "  cd %s && PYTHONPATH=$(pwd) python3 cosmos1/scripts/download_diffusion.py "
+                "--model_sizes 7B --model_types Text2World Video2World",
+                model_dir, self.cosmos_dir,
+            )
+        else:
+            logger.info("Cosmos checkpoint found: %s", model_dir)
 
-        try:
-            # Last resort: Stable Video Diffusion (well-supported in diffusers)
-            from diffusers import StableVideoDiffusionPipeline
-            self.pipeline = StableVideoDiffusionPipeline.from_pretrained(
-                "stabilityai/stable-video-diffusion-img2vid-xt",
-                torch_dtype=torch.float16,
-                variant="fp16",
-            ).to(self.device)
-            self.model_id = "stabilityai/stable-video-diffusion-img2vid-xt"
-            logger.info("Fallback: Stable Video Diffusion loaded")
-            self._loaded = True
-        except Exception as e:
-            logger.error("All video pipelines failed: %s", e)
-            raise
+        self._loaded = True
+        logger.info("Cosmos video manager ready (model=%s)", self.model_name)
 
     async def generate_text_to_video(
         self,
@@ -89,50 +97,57 @@ class CosmosVideoManager:
         height: int = 576,
         num_inference_steps: int = 50,
     ) -> Tuple[str, Optional[str]]:
-        """Generate video from text prompt. Returns (file_path, error)."""
+        """Generate video from text prompt via Cosmos text2world."""
         if not self._loaded:
-            return "", "Video model not loaded"
-
+            return "", "Cosmos not loaded. Run setup first."
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            self._generate_text_to_video_sync,
-            prompt, duration_seconds, width, height, num_inference_steps,
+        return await loop.run_in_executor(None, self._run_text2world, prompt)
+
+    def _run_text2world(self, prompt: str) -> Tuple[str, Optional[str]]:
+        """Run Cosmos text2world inference script."""
+        video_name = f"flowcut_{uuid.uuid4().hex[:8]}"
+        output_subdir = os.path.join(self.cosmos_dir, "outputs")
+        os.makedirs(output_subdir, exist_ok=True)
+
+        script_path = os.path.join(
+            self.cosmos_dir, "cosmos1", "models", "diffusion", "inference", "text2world.py"
         )
 
-    def _generate_text_to_video_sync(
-        self, prompt, duration_seconds, width, height, num_inference_steps
-    ) -> Tuple[str, Optional[str]]:
-        import torch
+        cmd = [
+            "python3", script_path,
+            "--checkpoint_dir", self.checkpoint_dir,
+            "--diffusion_transformer_dir", self.model_name,
+            "--prompt", prompt,
+            "--video_save_name", video_name,
+            *OFFLOAD_FLAGS,
+        ]
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = self.cosmos_dir
+
+        logger.info("Cosmos text2world: name=%s prompt=%s", video_name, prompt[:100])
 
         try:
-            # Calculate frames (~8 fps for Cosmos, ~14 fps for SVD)
-            fps = 8
-            num_frames = max(8, min(int(duration_seconds * fps), 80))
-
-            output_path = os.path.join(OUTPUT_DIR, f"{uuid.uuid4().hex}.mp4")
-
-            logger.info(
-                "Generating text-to-video: prompt=%r, frames=%d, %dx%d",
-                prompt[:60], num_frames, width, height,
+            result = subprocess.run(
+                cmd, cwd=self.cosmos_dir, env=env,
+                capture_output=True, text=True, timeout=600,
             )
+            if result.returncode != 0:
+                logger.error("Cosmos text2world failed:\nstderr: %s", result.stderr[-500:])
+                return "", f"Cosmos inference failed: {result.stderr[-200:]}"
 
-            with torch.no_grad():
-                result = self.pipeline(
-                    prompt=prompt,
-                    num_frames=num_frames,
-                    width=width,
-                    height=height,
-                    num_inference_steps=num_inference_steps,
-                )
+            output_path = self._find_output_video(video_name, output_subdir)
+            if output_path:
+                final_path = os.path.join(OUTPUT_DIR, f"{video_name}.mp4")
+                shutil.copy2(output_path, final_path)
+                logger.info("Video generated: %s", final_path)
+                return final_path, None
+            return "", "Cosmos completed but no output video found"
 
-            # Export frames to video
-            self._frames_to_video(result.frames[0], output_path, fps)
-            logger.info("Video saved: %s", output_path)
-            return output_path, None
-
+        except subprocess.TimeoutExpired:
+            return "", "Cosmos inference timed out (>10 min)"
         except Exception as e:
-            logger.error("Text-to-video failed: %s", e, exc_info=True)
+            logger.error("Cosmos text2world error: %s", e, exc_info=True)
             return "", str(e)
 
     async def generate_image_to_video(
@@ -144,56 +159,85 @@ class CosmosVideoManager:
         height: int = 576,
         num_inference_steps: int = 50,
     ) -> Tuple[str, Optional[str]]:
-        """Generate video from a single input image. Returns (file_path, error)."""
+        """Generate video from an input image via Cosmos video2world."""
         if not self._loaded:
-            return "", "Video model not loaded"
-
+            return "", "Cosmos not loaded."
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None,
-            self._generate_img_to_video_sync,
-            image_path_or_url, prompt, duration_seconds, width, height,
-            num_inference_steps,
+            None, self._run_video2world_from_image, image_path_or_url, prompt,
         )
 
-    def _generate_img_to_video_sync(
-        self, image_input, prompt, duration_seconds, width, height, steps
+    def _run_video2world_from_image(
+        self, image_input: str, prompt: str
     ) -> Tuple[str, Optional[str]]:
-        import torch
+        """Run Cosmos video2world with a single image input."""
         from PIL import Image
-        import requests
         from io import BytesIO
+        import requests
 
+        # Load input image to local file
         try:
-            # Load image
             if image_input.startswith("http"):
-                img = Image.open(BytesIO(requests.get(image_input).content))
+                resp = requests.get(image_input, timeout=30)
+                img = Image.open(BytesIO(resp.content))
             else:
                 img = Image.open(image_input)
-            img = img.convert("RGB").resize((width, height))
-
-            fps = 8
-            num_frames = max(8, min(int(duration_seconds * fps), 80))
-            output_path = os.path.join(OUTPUT_DIR, f"{uuid.uuid4().hex}.mp4")
-
-            logger.info("Generating image-to-video: %dx%d, frames=%d", width, height, num_frames)
-
-            with torch.no_grad():
-                result = self.pipeline(
-                    image=img,
-                    prompt=prompt if prompt else None,
-                    num_frames=num_frames,
-                    width=width,
-                    height=height,
-                    num_inference_steps=steps,
-                )
-
-            self._frames_to_video(result.frames[0], output_path, fps)
-            logger.info("Video saved: %s", output_path)
-            return output_path, None
-
+            tmp_img = os.path.join(OUTPUT_DIR, f"input_{uuid.uuid4().hex[:8]}.png")
+            img.convert("RGB").save(tmp_img)
         except Exception as e:
-            logger.error("Image-to-video failed: %s", e, exc_info=True)
+            return "", f"Failed to load input image: {e}"
+
+        video_name = f"flowcut_i2v_{uuid.uuid4().hex[:8]}"
+        output_subdir = os.path.join(self.cosmos_dir, "outputs")
+        os.makedirs(output_subdir, exist_ok=True)
+
+        # Try Video2World model
+        v2w_model = self.model_name.replace("Text2World", "Video2World")
+        script_path = os.path.join(
+            self.cosmos_dir, "cosmos1", "models", "diffusion", "inference", "video2world.py"
+        )
+
+        if not os.path.isfile(script_path):
+            logger.warning("video2world script not found, falling back to text2world")
+            enhanced = f"Starting from this scene: {prompt}" if prompt else "Animate this scene"
+            return self._run_text2world(enhanced)
+
+        cmd = [
+            "python3", script_path,
+            "--checkpoint_dir", self.checkpoint_dir,
+            "--diffusion_transformer_dir", v2w_model,
+            "--input_image_or_video_path", tmp_img,
+            "--video_save_name", video_name,
+            *OFFLOAD_FLAGS,
+        ]
+        if prompt:
+            cmd.extend(["--prompt", prompt])
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = self.cosmos_dir
+
+        logger.info("Cosmos video2world (image): name=%s", video_name)
+
+        try:
+            result = subprocess.run(
+                cmd, cwd=self.cosmos_dir, env=env,
+                capture_output=True, text=True, timeout=600,
+            )
+            if result.returncode != 0:
+                logger.warning("video2world failed, falling back to text2world: %s",
+                               result.stderr[-200:])
+                return self._run_text2world(prompt or "Animate this scene")
+
+            output_path = self._find_output_video(video_name, output_subdir)
+            if output_path:
+                final_path = os.path.join(OUTPUT_DIR, f"{video_name}.mp4")
+                shutil.copy2(output_path, final_path)
+                return final_path, None
+            return "", "No output video found"
+
+        except subprocess.TimeoutExpired:
+            return "", "Cosmos video2world timed out"
+        except Exception as e:
             return "", str(e)
 
     async def generate_morph_video(
@@ -206,116 +250,133 @@ class CosmosVideoManager:
         height: int = 576,
         num_inference_steps: int = 50,
     ) -> Tuple[str, Optional[str]]:
-        """Generate morph transition between two frames. Returns (file_path, error)."""
+        """Generate morph transition between two frames using Cosmos."""
         if not self._loaded:
-            return "", "Video model not loaded"
-
+            return "", "Cosmos not loaded."
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None,
-            self._generate_morph_sync,
-            start_image, end_image, prompt, duration_seconds, width, height,
-            num_inference_steps,
+            None, self._run_morph, start_image, end_image, prompt,
         )
 
-    def _generate_morph_sync(
-        self, start_img_input, end_img_input, prompt, duration_seconds,
-        width, height, steps
+    def _run_morph(
+        self, start_img_input: str, end_img_input: str, prompt: str,
     ) -> Tuple[str, Optional[str]]:
-        import torch
+        """
+        Generate morph: use Cosmos video2world starting from first frame,
+        then blend the ending frames toward the target end image.
+        """
         import numpy as np
         from PIL import Image
-        import requests
         from io import BytesIO
+        import requests
+
+        def load_img(src):
+            if src.startswith("http"):
+                return Image.open(BytesIO(requests.get(src, timeout=30).content)).convert("RGB")
+            return Image.open(src).convert("RGB")
 
         try:
-            # Load start and end images
-            def load_img(src):
-                if src.startswith("http"):
-                    return Image.open(BytesIO(requests.get(src).content)).convert("RGB")
-                return Image.open(src).convert("RGB")
-
-            start_img = load_img(start_img_input).resize((width, height))
-            end_img = load_img(end_img_input).resize((width, height))
-
-            fps = 8
-            num_frames = max(8, min(int(duration_seconds * fps), 80))
-            output_path = os.path.join(OUTPUT_DIR, f"morph_{uuid.uuid4().hex}.mp4")
-
-            morph_prompt = prompt or "Smooth morphing transition between two scenes"
-
-            logger.info(
-                "Generating morph: %dx%d, frames=%d, prompt=%r",
-                width, height, num_frames, morph_prompt[:60],
-            )
-
-            # Strategy 1: Use pipeline with start image + prompt describing end
-            # The model generates a natural transition from the start frame
-            with torch.no_grad():
-                result = self.pipeline(
-                    image=start_img,
-                    prompt=morph_prompt,
-                    num_frames=num_frames,
-                    width=width,
-                    height=height,
-                    num_inference_steps=steps,
-                )
-
-            frames = list(result.frames[0])
-
-            # Blend the last few frames toward the end image for smooth landing
-            blend_count = min(len(frames) // 4, 8)
-            end_array = np.array(end_img)
-            for i in range(blend_count):
-                alpha = (i + 1) / blend_count
-                idx = len(frames) - blend_count + i
-                frame_array = np.array(frames[idx])
-                blended = ((1 - alpha) * frame_array + alpha * end_array).astype(np.uint8)
-                frames[idx] = Image.fromarray(blended)
-
-            self._frames_to_video(frames, output_path, fps)
-            logger.info("Morph video saved: %s", output_path)
-            return output_path, None
-
+            start_img = load_img(start_img_input)
+            end_img = load_img(end_img_input)
         except Exception as e:
-            logger.error("Morph generation failed: %s", e, exc_info=True)
-            return "", str(e)
+            return "", f"Failed to load morph images: {e}"
 
-    def _frames_to_video(self, frames, output_path: str, fps: int = 8):
-        """Convert PIL Image frames to an MP4 video using ffmpeg."""
-        import subprocess
+        # Save start image
+        start_path = os.path.join(OUTPUT_DIR, f"morph_start_{uuid.uuid4().hex[:8]}.png")
+        start_img.save(start_path)
 
-        # Write frames to temp dir, then ffmpeg combine
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for i, frame in enumerate(frames):
-                if hasattr(frame, 'save'):
-                    frame.save(os.path.join(tmpdir, f"frame_{i:05d}.png"))
-                else:
-                    from PIL import Image
-                    Image.fromarray(frame).save(os.path.join(tmpdir, f"frame_{i:05d}.png"))
+        morph_prompt = prompt or "Smoothly transition and transform this scene with fluid cinematic motion"
 
-            cmd = [
-                "ffmpeg", "-y",
-                "-framerate", str(fps),
-                "-i", os.path.join(tmpdir, "frame_%05d.png"),
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-preset", "fast",
-                "-crf", "18",
-                output_path,
-            ]
-            subprocess.run(cmd, capture_output=True, check=True)
+        # Generate video from start frame
+        video_path, error = self._run_video2world_from_image(start_path, morph_prompt)
+        if error:
+            logger.warning("Image morph failed (%s), trying text2world", error)
+            video_path, error = self._run_text2world(morph_prompt)
+
+        if error or not video_path:
+            return "", error or "Morph generation failed"
+
+        # Post-process: blend last 25% of frames toward end image
+        try:
+            video_path = self._blend_end_frames(video_path, end_img)
+        except Exception as e:
+            logger.warning("End-frame blending failed (using raw): %s", e)
+
+        return video_path, None
+
+    def _blend_end_frames(self, video_path: str, end_img) -> str:
+        """Blend the last 25% of frames toward the end image."""
+        import numpy as np
+        from PIL import Image
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp(prefix="morph_blend_")
+
+        # Extract frames
+        subprocess.run([
+            "ffmpeg", "-y", "-i", video_path,
+            os.path.join(tmpdir, "frame_%05d.png"),
+        ], capture_output=True, check=True)
+
+        frames = sorted([
+            os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".png")
+        ])
+        if not frames:
+            return video_path
+
+        # Match end image to frame size
+        sample = Image.open(frames[0])
+        end_resized = end_img.resize(sample.size)
+        end_array = np.array(end_resized)
+
+        # Blend last 25% toward end
+        blend_count = max(1, len(frames) // 4)
+        for i in range(blend_count):
+            alpha = (i + 1) / blend_count
+            idx = len(frames) - blend_count + i
+            frame = np.array(Image.open(frames[idx]))
+            blended = ((1 - alpha) * frame + alpha * end_array).astype(np.uint8)
+            Image.fromarray(blended).save(frames[idx])
+
+        # Get fps from original
+        probe = subprocess.run([
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0",
+            video_path,
+        ], capture_output=True, text=True)
+        fps = "8"
+        if probe.returncode == 0 and "/" in probe.stdout.strip():
+            num, den = probe.stdout.strip().split("/")
+            fps = str(int(int(num) / max(1, int(den))))
+
+        output_path = os.path.join(OUTPUT_DIR, f"morph_blended_{uuid.uuid4().hex[:8]}.mp4")
+        subprocess.run([
+            "ffmpeg", "-y", "-framerate", fps,
+            "-i", os.path.join(tmpdir, "frame_%05d.png"),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "18",
+            output_path,
+        ], capture_output=True, check=True)
+
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return output_path
+
+    def _find_output_video(self, video_name: str, output_dir: str) -> Optional[str]:
+        """Find the generated video file in Cosmos outputs."""
+        for ext in [".mp4", ".avi", ".mkv", ".webm"]:
+            candidate = os.path.join(output_dir, f"{video_name}{ext}")
+            if os.path.isfile(candidate):
+                return candidate
+        # Search recursively
+        for root, dirs, files in os.walk(output_dir):
+            for f in files:
+                if video_name in f and f.endswith((".mp4", ".avi", ".mkv", ".webm")):
+                    return os.path.join(root, f)
+        return None
 
     async def unload(self):
-        """Release GPU memory."""
-        import torch
-        if self.pipeline:
-            del self.pipeline
-            self.pipeline = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        """Nothing to unload — Cosmos runs as subprocess."""
         self._loaded = False
-        logger.info("Cosmos model unloaded")
+        logger.info("Cosmos manager stopped")
 
     @property
     def is_loaded(self) -> bool:
