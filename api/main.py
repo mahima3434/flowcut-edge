@@ -15,7 +15,7 @@ from api.routes.models import router as models_router
 from api.routes.health import router as health_router
 from api.routes.video import router as video_router
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("flowcut-edge")
 
 # Model paths (set by docker-compose or setup.sh)
@@ -39,9 +39,22 @@ async def lifespan(app: FastAPI):
     logger.info(f"Device:       {DEVICE}")
 
     # Lazy import so the app can still start if deps are missing
-    from api.model_manager import ModelManager
-    manager = ModelManager()
-    await manager.load_models(TEXT_MODEL, VISION_MODEL, DEVICE)
+    try:
+        from api.model_manager import ModelManager
+        manager = ModelManager()
+        await manager.load_models(TEXT_MODEL, VISION_MODEL, DEVICE)
+    except Exception as e:
+        logger.exception("CRITICAL: Failed to initialize ModelManager: %s", e)
+        # Create a dummy manager or handled state could be added here, 
+        # but since ModelManager handles its own errors now, this catch is for import/init errors.
+        # We need to ensure app.state.model_manager exists to avoid 500s in endpoints
+        class DummyManager:
+            is_loaded = False
+            load_error = f"Startup failed: {e}"
+            def available_models(self): return []
+            async def unload(self): pass
+        manager = DummyManager()
+        
     app.state.model_manager = manager
 
     # Load Cosmos video generation model

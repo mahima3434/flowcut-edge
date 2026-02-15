@@ -23,6 +23,7 @@ class ModelManager:
         self.text_model_name = ""
         self.vision_model_name = ""
         self._loaded = False
+        self.load_error = None
 
     async def load_models(
         self,
@@ -39,11 +40,17 @@ class ModelManager:
 
     def _load_sync(self):
         """Synchronous model loading."""
-        logger.info("Loading text model: %s", self.text_model_name)
-        self._load_text_model()
-        logger.info("Loading vision model: %s", self.vision_model_name)
-        self._load_vision_model()
-        self._loaded = True
+        try:
+            logger.info("Loading text model: %s", self.text_model_name)
+            self._load_text_model()
+            logger.info("Loading vision model: %s", self.vision_model_name)
+            self._load_vision_model()
+            self._loaded = True
+            self.load_error = None
+        except Exception as e:
+            logger.error("Failed to load models: %s", e)
+            self.load_error = str(e)
+            self._loaded = False
 
     def _load_text_model(self):
         """Load Nemotron-Mini for text/tool-calling."""
@@ -69,7 +76,8 @@ class ModelManager:
             logger.info("Text model loaded successfully")
         except Exception as e:
             logger.error("Failed to load text model: %s", e)
-            raise
+            # We don't raise here anymore to allow partial loading or graceful failure
+            raise e
 
     def _load_vision_model(self):
         """Load Phi-3.5 Vision for vision-language tasks."""
@@ -102,7 +110,7 @@ class ModelManager:
             logger.info("Vision model loaded successfully")
         except Exception as e:
             logger.error("Failed to load vision model: %s", e)
-            raise
+            raise e
 
     async def generate_text(
         self,
