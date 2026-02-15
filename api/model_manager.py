@@ -104,7 +104,6 @@ class ModelManager:
             AutoProcessor,
             AutoTokenizer,
             AutoImageProcessor,
-            AutoModelForVision2Seq,
             AutoModelForCausalLM,
         )
 
@@ -139,23 +138,13 @@ class ModelManager:
         dtype = torch.float16 if self._device == "cuda" else torch.float32
         device_map = "auto" if self._device == "cuda" else None
 
-        # Try Vision2Seq first, then CausalLM (model architecture varies)
-        try:
-            self._model = AutoModelForVision2Seq.from_pretrained(
-                self.model_id,
-                torch_dtype=dtype,
-                device_map=device_map,
-                trust_remote_code=True,
-            )
-            logger.info("Loaded as Vision2Seq model")
-        except Exception:
-            self._model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                torch_dtype=dtype,
-                device_map=device_map,
-                trust_remote_code=True,
-            )
-            logger.info("Loaded as CausalLM model")
+        self._model = AutoModelForCausalLM.from_pretrained(
+        self.model_id,
+        torch_dtype=dtype,
+        device_map=device_map,
+        trust_remote_code=True,
+        )
+        logger.info("Loaded as CasualLM model")
 
     # ── Inference ────────────────────────────────────────────────────
 
