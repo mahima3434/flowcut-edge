@@ -165,7 +165,6 @@ class ModelManager:
             device_map=device_map,
             trust_remote_code=True,
             attn_implementation=ATTN_IMPL,
-            _attn_implementation=ATTN_IMPL,
         )
         logger.info("Loaded as CasualLM model")
 
