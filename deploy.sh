@@ -41,8 +41,8 @@ pip install --quiet --upgrade pip
 log "Installing Python dependencies..."
 pip install --quiet -r requirements.txt
 
-# ── Pre-download NanoVLM model ──────────────────────────────────────
-log "Pre-downloading NanoVLM (VILA 1.5-3B)..."
+# ── Pre-download Phi-3.5 Vision model ────────────────────────────────────────
+log "Pre-downloading Phi-3.5 Vision..."
 python3 -c "
 from huggingface_hub import snapshot_download
 import os
@@ -50,8 +50,8 @@ import os
 cache = os.path.expanduser('~/.cache/huggingface/hub')
 os.makedirs(cache, exist_ok=True)
 
-print('Downloading Efficient-Large-Model/VILA1.5-3b...')
-snapshot_download('Efficient-Large-Model/VILA1.5-3b', cache_dir=cache)
+print('Downloading microsoft/Phi-3.5-vision-instruct...')
+snapshot_download('microsoft/Phi-3.5-vision-instruct', cache_dir=cache)
 print('Done!')
 "
 

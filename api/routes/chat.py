@@ -1,6 +1,6 @@
 """
 OpenAI-compatible /v1/chat/completions endpoint.
-Routes all requests to NanoVLM (VILA-1.5-3B) for both vision and text.
+Routes all requests to Phi-3.5 Vision for both vision and text.
 """
 
 import time
@@ -36,7 +36,7 @@ class ToolDef(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "nanovlm"
+    model: str = "phi-3.5-vision"
     messages: List[ChatMessage]
     max_tokens: Optional[int] = 1024
     temperature: Optional[float] = 0.7
@@ -82,11 +82,11 @@ def _has_images(messages: List[ChatMessage]) -> bool:
 
 @router.post("/chat/completions")
 async def chat_completions(req: ChatCompletionRequest, request: Request):
-    """OpenAI-compatible chat completions — routes to NanoVLM."""
+    """OpenAI-compatible chat completions — routes to Phi-3.5 Vision."""
     manager = request.app.state.model_manager
 
     if not manager.is_loaded:
-        raise HTTPException(503, "NanoVLM is still loading, please wait...")
+        raise HTTPException(503, "Vision model is still loading, please wait...")
 
     if req.stream:
         raise HTTPException(501, "Streaming not yet supported")
@@ -96,14 +96,14 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
 
     try:
         if use_vision:
-            logger.info("NanoVLM vision request — %d messages", len(messages))
+            logger.info("Phi-3.5 vision request — %d messages", len(messages))
             result = await manager.generate_vision(
                 messages=messages,
                 max_tokens=req.max_tokens or 1024,
                 temperature=req.temperature or 0.7,
             )
         else:
-            logger.info("NanoVLM text request — %d messages", len(messages))
+            logger.info("Phi-3.5 text request — %d messages", len(messages))
             result = await manager.generate_text(
                 messages=messages,
                 max_tokens=req.max_tokens or 1024,
@@ -117,7 +117,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
     return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
         created=int(time.time()),
-        model="nanovlm",
+        model="phi-3.5-vision",
         choices=[
             ChatChoice(
                 message={

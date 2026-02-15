@@ -215,34 +215,37 @@ class ModelManager:
         max_tokens: int = 1024,
         temperature: float = 0.7,
     ) -> str:
-        """Synchronous generation (run in thread)."""
+        """Synchronous generation for Phi-3.5 Vision."""
         try:
+            # Build content with <|image_N|> placeholders for each image
             if images:
-                if hasattr(self._processor, "apply_chat_template"):
-                    msgs = [{"role": "user", "content": text}]
-                    prompt = self._processor.apply_chat_template(
-                        msgs, add_generation_prompt=True
-                    )
-                    inputs = self._processor(
-                        text=prompt,
-                        images=images if len(images) > 1 else images[0],
-                        return_tensors="pt",
-                    )
-                else:
-                    inputs = self._processor(
-                        text=text,
-                        images=images if len(images) > 1 else images[0],
-                        return_tensors="pt",
-                    )
+                placeholders = "".join(
+                    f"<|image_{i+1}|>\n" for i in range(len(images))
+                )
+                user_content = f"{placeholders}{text}"
             else:
-                if hasattr(self._processor, "apply_chat_template"):
-                    msgs = [{"role": "user", "content": text}]
-                    prompt = self._processor.apply_chat_template(
-                        msgs, add_generation_prompt=True
-                    )
-                    inputs = self._processor(text=prompt, return_tensors="pt")
-                else:
-                    inputs = self._processor(text=text, return_tensors="pt")
+                user_content = text
+
+            msgs = [{"role": "user", "content": user_content}]
+
+            # Phi-3.5 Vision: use processor.tokenizer for chat template
+            tokenizer = getattr(self._processor, "tokenizer", self._processor)
+            prompt = tokenizer.apply_chat_template(
+                msgs, tokenize=False, add_generation_prompt=True
+            )
+
+            # Build processor inputs
+            if images:
+                inputs = self._processor(
+                    text=prompt,
+                    images=images,
+                    return_tensors="pt",
+                )
+            else:
+                inputs = self._processor(
+                    text=prompt,
+                    return_tensors="pt",
+                )
 
             inputs = self._to_device(inputs)
 
