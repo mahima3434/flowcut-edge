@@ -101,6 +101,7 @@ class ModelManager:
     def _load_sync(self):
         """Synchronous model loading (run in thread)."""
         from transformers import (
+            AutoConfig,
             AutoProcessor,
             AutoTokenizer,
             AutoImageProcessor,
@@ -138,11 +139,17 @@ class ModelManager:
         dtype = torch.float16 if self._device == "cuda" else torch.float32
         device_map = "auto" if self._device == "cuda" else None
 
+        config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
+        if getattr(config, "model_type", None) == "llava_lama":
+            logger.warning("LLava-Llama model detected. Using Llama model type.")
+            config.model_type = "llava"
+
         self._model = AutoModelForCausalLM.from_pretrained(
-        self.model_id,
-        torch_dtype=dtype,
-        device_map=device_map,
-        trust_remote_code=True,
+            self.model_id,
+            config=config,
+            torch_dtype=dtype,
+            device_map=device_map,
+            trust_remote_code=True,
         )
         logger.info("Loaded as CasualLM model")
 
