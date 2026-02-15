@@ -17,6 +17,48 @@ logger = logging.getLogger("flowcut-edge")
 DEFAULT_MODEL_ID = "Efficient-Large-Model/VILA1.5-3b"
 
 
+class _ProcessorShim:
+    """
+    A small wrapper that behaves like a processor:
+      - __call__(text=..., images=...) -> dict of tensors
+      - decode(ids) -> string
+      - apply_chat_template(msgs, add_generation_prompt=True) if tokenizer supports it
+    """
+
+    def __init__(self, tokenizer, image_processor):
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+
+    def apply_chat_template(self, msgs, add_generation_prompt: bool = True):
+        if hasattr(self.tokenizer, "apply_chat_template"):
+            return self.tokenizer.apply_chat_template(
+                msgs, add_generation_prompt=add_generation_prompt, tokenize=False
+            )
+        # Fallback: join message contents
+        return "\n".join(m.get("content", "") for m in msgs if isinstance(m, dict))
+
+    def __call__(self, text=None, images=None, return_tensors="pt", **kwargs):
+        out: Dict[str, torch.Tensor] = {}
+
+        if text is not None:
+            tok = self.tokenizer(
+                text,
+                return_tensors=return_tensors,
+                padding=False,
+                truncation=False,
+            )
+            out.update(tok)
+
+        if images is not None:
+            img = self.image_processor(images=images, return_tensors=return_tensors)
+            out.update(img)
+
+        return out
+
+    def decode(self, ids, skip_special_tokens: bool = True) -> str:
+        return self.tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+
+
 class ModelManager:
     """
     Manages NanoVLM (VILA-1.5-3B) for vision + text tasks.
@@ -58,28 +100,59 @@ class ModelManager:
 
     def _load_sync(self):
         """Synchronous model loading (run in thread)."""
-        from transformers import AutoProcessor
-
-        self._processor = AutoProcessor.from_pretrained(
-            self.model_id, trust_remote_code=True
+        from transformers import (
+            AutoProcessor,
+            AutoTokenizer,
+            AutoImageProcessor,
+            AutoModelForVision2Seq,
+            AutoModelForCausalLM,
         )
+
+        # ---- Processor (robust) --------------------------------------------
+        try:
+            # Works for models that ship a root-level processor config
+            self._processor = AutoProcessor.from_pretrained(
+                self.model_id, trust_remote_code=True
+            )
+            logger.info("Loaded processor via AutoProcessor")
+        except Exception as e:
+            logger.warning(
+                "AutoProcessor failed (%s). Falling back to llm/ + vision_tower/ loaders.",
+                str(e),
+            )
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.model_id,
+                subfolder="llm",
+                trust_remote_code=True,
+                use_fast=False,
+            )
+            image_processor = AutoImageProcessor.from_pretrained(
+                self.model_id,
+                subfolder="vision_tower",
+                trust_remote_code=True,
+            )
+            self._processor = _ProcessorShim(tokenizer=tokenizer, image_processor=image_processor)
+            logger.info("Loaded processor via fallback shim (llm/ + vision_tower/)")
+
+        # ---- Model ----------------------------------------------------------
+        dtype = torch.float16 if self._device == "cuda" else torch.float32
+        device_map = "auto" if self._device == "cuda" else None
 
         # Try Vision2Seq first, then CausalLM (model architecture varies)
         try:
-            from transformers import AutoModelForVision2Seq
             self._model = AutoModelForVision2Seq.from_pretrained(
                 self.model_id,
-                torch_dtype=torch.float16 if self._device == "cuda" else torch.float32,
-                device_map="auto" if self._device == "cuda" else None,
+                torch_dtype=dtype,
+                device_map=device_map,
                 trust_remote_code=True,
             )
             logger.info("Loaded as Vision2Seq model")
         except Exception:
-            from transformers import AutoModelForCausalLM
             self._model = AutoModelForCausalLM.from_pretrained(
                 self.model_id,
-                torch_dtype=torch.float16 if self._device == "cuda" else torch.float32,
-                device_map="auto" if self._device == "cuda" else None,
+                torch_dtype=dtype,
+                device_map=device_map,
                 trust_remote_code=True,
             )
             logger.info("Loaded as CausalLM model")
@@ -119,6 +192,11 @@ class ModelManager:
         )
         return {"content": content, "finish_reason": "stop"}
 
+    def _to_device(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Move tensor dict to the model device."""
+        dev = self._model.device if self._model is not None else self._device
+        return {k: (v.to(dev) if hasattr(v, "to") else v) for k, v in inputs.items()}
+
     def _generate_sync(
         self,
         text: str,
@@ -138,26 +216,24 @@ class ModelManager:
                         text=prompt,
                         images=images if len(images) > 1 else images[0],
                         return_tensors="pt",
-                    ).to(self._model.device)
+                    )
                 else:
                     inputs = self._processor(
                         text=text,
                         images=images if len(images) > 1 else images[0],
                         return_tensors="pt",
-                    ).to(self._model.device)
+                    )
             else:
                 if hasattr(self._processor, "apply_chat_template"):
                     msgs = [{"role": "user", "content": text}]
                     prompt = self._processor.apply_chat_template(
                         msgs, add_generation_prompt=True
                     )
-                    inputs = self._processor(
-                        text=prompt, return_tensors="pt"
-                    ).to(self._model.device)
+                    inputs = self._processor(text=prompt, return_tensors="pt")
                 else:
-                    inputs = self._processor(
-                        text=text, return_tensors="pt"
-                    ).to(self._model.device)
+                    inputs = self._processor(text=text, return_tensors="pt")
+
+            inputs = self._to_device(inputs)
 
             with torch.no_grad():
                 output_ids = self._model.generate(
@@ -179,8 +255,6 @@ class ModelManager:
 
     def _extract_content(self, messages: List[Dict[str, Any]]):
         """Extract text and PIL images from OpenAI-style messages."""
-        from PIL import Image
-
         text_parts = []
         images = []
 
