@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-# FlowCut Edge — NVIDIA Cosmos Setup for ASUS Ascent GX10
-# Run this ON the GX10 after the basic deploy.sh has completed.
+# FlowCut Edge — NVIDIA Cosmos Predict 2.5 Setup for ASUS Ascent GX10
+# Run this ON the GX10 after deploy.sh has completed.
 # ============================================================================
 set -euo pipefail
 
@@ -14,74 +14,77 @@ log()   { echo -e "${GREEN}[cosmos-setup]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[cosmos-setup]${NC} $*"; }
 error() { echo -e "${RED}[cosmos-setup]${NC} $*" >&2; }
 
-COSMOS_DIR="${HOME}/Cosmos"
+COSMOS_DIR="${HOME}/cosmos-predict2.5"
 
-# ── Step 1: Install jetson-containers ───────────────────────────────
-if ! command -v jetson-containers &>/dev/null; then
-    log "Installing jetson-containers..."
-    if [[ ! -d "${HOME}/jetson-containers" ]]; then
-        git clone https://github.com/dusty-nv/jetson-containers "${HOME}/jetson-containers"
-    fi
-    bash "${HOME}/jetson-containers/install.sh"
+# ── Step 1: Install system deps ────────────────────────────────────
+log "Installing system dependencies..."
+sudo apt update -qq
+sudo apt install -y -qq git git-lfs curl ffmpeg libx11-dev tree wget 2>/dev/null
+git lfs install
+
+# ── Step 2: Install uv (Python package manager) ───────────────────
+if ! command -v uv &>/dev/null; then
+    log "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    source "${HOME}/.local/bin/env" 2>/dev/null || export PATH="${HOME}/.local/bin:$PATH"
 else
-    log "jetson-containers already installed"
+    log "uv already installed"
 fi
 
-# ── Step 2: Clone Cosmos repo ──────────────────────────────────────
+# ── Step 3: Clone Cosmos Predict 2.5 ──────────────────────────────
 if [[ ! -d "$COSMOS_DIR" ]]; then
-    log "Cloning NVIDIA Cosmos repository..."
-    git clone --recursive https://github.com/NVIDIA/Cosmos.git "$COSMOS_DIR"
+    log "Cloning nvidia-cosmos/cosmos-predict2.5..."
+    git clone https://github.com/nvidia-cosmos/cosmos-predict2.5.git "$COSMOS_DIR"
+    cd "$COSMOS_DIR"
+    git lfs pull
 else
-    log "Cosmos repo already exists at $COSMOS_DIR"
+    log "cosmos-predict2.5 already exists at $COSMOS_DIR"
+    cd "$COSMOS_DIR"
+    git pull --ff-only 2>/dev/null || true
+    git lfs pull
 fi
 
-# ── Step 3: HuggingFace login ─────────────────────────────────────
+# ── Step 4: Setup Python environment (CUDA 13.0 for Blackwell) ────
+cd "$COSMOS_DIR"
+if [[ ! -d ".venv" ]]; then
+    log "Setting up Python environment with CUDA 13.0 support..."
+    uv python install
+    uv sync --extra=cu130
+else
+    log "Python venv already exists, syncing..."
+    uv sync --extra=cu130
+fi
+source .venv/bin/activate
+
+# ── Step 5: HuggingFace login ─────────────────────────────────────
 log "Checking HuggingFace authentication..."
-if ! python3 -c "from huggingface_hub import HfApi; HfApi().whoami()" 2>/dev/null; then
-    warn "Please log in to HuggingFace to download Cosmos models:"
+if ! python -c "from huggingface_hub import HfApi; HfApi().whoami()" 2>/dev/null; then
+    warn "HuggingFace login required for model downloads."
     warn "  1. Get a token from https://huggingface.co/settings/tokens"
-    warn "  2. Accept the license at https://huggingface.co/nvidia/Cosmos-1.0-Diffusion-7B-Text2World"
+    warn "  2. Accept the license at https://huggingface.co/nvidia/Cosmos-Guardrail1"
     echo ""
-    cd "$COSMOS_DIR"
-    source "${HOME}/flowcut-edge/.venv/bin/activate" 2>/dev/null || true
-    python3 -m huggingface_hub.commands.huggingface_cli login
+    hf auth login
 else
     log "HuggingFace authenticated"
 fi
 
-# ── Step 4: Download Cosmos models ─────────────────────────────────
-CHECKPOINT_DIR="${COSMOS_DIR}/checkpoints"
-if [[ ! -d "${CHECKPOINT_DIR}/Cosmos-1.0-Diffusion-7B-Text2World" ]]; then
-    log "Downloading Cosmos 7B models (Text2World + Video2World)..."
-    log "This may take 20-30 minutes depending on connection speed..."
-    cd "$COSMOS_DIR"
-    PYTHONPATH="$COSMOS_DIR" python3 cosmos1/scripts/download_diffusion.py \
-        --model_sizes 7B \
-        --model_types Text2World Video2World
-    log "Models downloaded!"
-else
-    log "Cosmos checkpoints already exist"
-fi
-
-# ── Step 5: Quick test ─────────────────────────────────────────────
+# ── Step 6: Quick test (downloads checkpoints on first run) ───────
 log ""
 log "=========================================="
-log "  Cosmos setup complete!"
+log "  Cosmos Predict 2.5 setup complete!"
 log "=========================================="
 log ""
-log "Models at: ${CHECKPOINT_DIR}"
-ls -la "${CHECKPOINT_DIR}/" 2>/dev/null || true
+log "Repo at: ${COSMOS_DIR}"
+log "Python:  $(which python)"
 log ""
-log "To test text-to-video generation:"
+log "To test text-to-video generation (auto-downloads ~4GB checkpoint on first run):"
 log "  cd ${COSMOS_DIR}"
-log "  PYTHONPATH=\$(pwd) python3 cosmos1/models/diffusion/inference/text2world.py \\"
-log "    --checkpoint_dir checkpoints \\"
-log "    --diffusion_transformer_dir Cosmos-1.0-Diffusion-7B-Text2World \\"
-log "    --prompt 'A beautiful sunset over the ocean' \\"
-log "    --video_save_name test_output \\"
-log "    --offload_tokenizer --offload_diffusion_transformer \\"
-log "    --offload_text_encoder_model --offload_prompt_upsampler \\"
-log "    --offload_guardrail_models"
+log "  source .venv/bin/activate"
+log "  python examples/inference.py \\"
+log "    -i assets/base/snowy_stop_light.json \\"
+log "    -o outputs/test \\"
+log "    --inference-type=text2world \\"
+log "    --model=2B/post-trained"
 log ""
 log "Then restart FlowCut Edge server:"
 log "  cd ~/flowcut-edge && bash start.sh"

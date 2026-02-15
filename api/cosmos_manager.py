@@ -1,93 +1,185 @@
 """
-NVIDIA Cosmos video generation manager — uses official Cosmos repo + scripts.
-Runs inference via the Cosmos Python scripts (text2world, video2world)
-either natively or inside a jetson-container.
+NVIDIA Cosmos Predict 2.5 video generation manager.
+Uses the official nvidia-cosmos/cosmos-predict2.5 repo for inference via subprocess.
+Supports text2world, image2world, video2world, and morph transitions.
 
-Setup on the ASUS Ascent GX10:
-  git clone --recursive https://github.com/NVIDIA/Cosmos.git ~/Cosmos
-  cd ~/Cosmos
-  huggingface-cli login
-  PYTHONPATH=$(pwd) python3 cosmos1/scripts/download_diffusion.py --model_sizes 7B --model_types Text2World Video2World
+Setup on the ASUS Ascent GX10 (NVIDIA GB10 Blackwell):
+  git clone https://github.com/nvidia-cosmos/cosmos-predict2.5.git ~/cosmos-predict2.5
+  cd ~/cosmos-predict2.5 && git lfs pull
+  curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
+  uv python install && uv sync --extra=cu130
+  hf auth login   # accept license at https://huggingface.co/nvidia/Cosmos-Guardrail1
+  # Checkpoints auto-download on first inference
 """
 
 import logging
 import asyncio
+import json
 import os
 import uuid
 import subprocess
 import shutil
+import tempfile
 from typing import Optional, Tuple
-from pathlib import Path
 
 logger = logging.getLogger("flowcut-edge")
 
 # Paths
-COSMOS_DIR = os.getenv("COSMOS_DIR", os.path.expanduser("~/Cosmos"))
-CHECKPOINT_DIR = os.path.join(COSMOS_DIR, "checkpoints")
+COSMOS_DIR = os.getenv("COSMOS_DIR", os.path.expanduser("~/cosmos-predict2.5"))
 OUTPUT_DIR = os.getenv("VIDEO_OUTPUT_DIR", "/tmp/flowcut-edge/videos")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Model config
-DEFAULT_MODEL = os.getenv("COSMOS_MODEL", "Cosmos-1.0-Diffusion-7B-Text2World")
+# Model variant: "2B/post-trained" (fast, edge-friendly), "2B/distilled" (fastest, text2world only), "14B/post-trained"
+DEFAULT_MODEL = os.getenv("COSMOS_MODEL", "2B/post-trained")
 
-# Common offload flags for memory-efficient inference on Jetson/edge
-OFFLOAD_FLAGS = [
-    "--offload_tokenizer",
-    "--offload_diffusion_transformer",
-    "--offload_text_encoder_model",
-    "--offload_prompt_upsampler",
-    "--offload_guardrail_models",
-]
+# Timeout for inference (seconds) — 2B model is much faster than 14B
+INFERENCE_TIMEOUT = int(os.getenv("COSMOS_TIMEOUT", "600"))
 
 
 class CosmosVideoManager:
-    """Manages NVIDIA Cosmos for on-device video generation via official scripts."""
+    """Manages NVIDIA Cosmos Predict 2.5 for on-device video generation."""
 
     def __init__(self):
         self.cosmos_dir = COSMOS_DIR
-        self.checkpoint_dir = CHECKPOINT_DIR
-        self.model_name = DEFAULT_MODEL
+        self.model_variant = DEFAULT_MODEL
         self._loaded = False
-        self.model_id = DEFAULT_MODEL
+        self.model_id = f"cosmos-predict2.5-{DEFAULT_MODEL.replace('/', '-')}"
 
     async def load_model(self, model_id: str = None, device: str = "cuda"):
-        """Verify Cosmos is installed and models are downloaded."""
+        """Verify Cosmos Predict 2.5 is installed."""
         if model_id:
-            self.model_name = model_id
-            self.model_id = model_id
+            # Allow passing variant like "2B/post-trained" or full name
+            if "/" in model_id and not model_id.startswith("nvidia"):
+                self.model_variant = model_id
+            self.model_id = f"cosmos-predict2.5-{self.model_variant.replace('/', '-')}"
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._verify_setup)
 
     def _verify_setup(self):
-        """Check that Cosmos repo and checkpoints exist."""
+        """Check that cosmos-predict2.5 repo exists and is set up."""
         if not os.path.isdir(self.cosmos_dir):
             raise FileNotFoundError(
-                f"Cosmos repo not found at {self.cosmos_dir}. "
-                "Run: git clone --recursive https://github.com/NVIDIA/Cosmos.git ~/Cosmos"
+                f"cosmos-predict2.5 repo not found at {self.cosmos_dir}. "
+                "Run: git clone https://github.com/nvidia-cosmos/cosmos-predict2.5.git "
+                f"{self.cosmos_dir}"
             )
 
-        t2w_script = os.path.join(
-            self.cosmos_dir, "cosmos1", "models", "diffusion", "inference", "text2world.py"
-        )
-        if not os.path.isfile(t2w_script):
+        inference_script = os.path.join(self.cosmos_dir, "examples", "inference.py")
+        if not os.path.isfile(inference_script):
             raise FileNotFoundError(
-                f"Cosmos text2world script not found at {t2w_script}. "
-                "Make sure you cloned with --recursive."
+                f"Inference script not found at {inference_script}. "
+                "Make sure the repo is cloned correctly with git lfs pull."
             )
 
-        model_dir = os.path.join(self.checkpoint_dir, self.model_name)
-        if not os.path.isdir(model_dir):
+        # Check if venv exists
+        venv_python = os.path.join(self.cosmos_dir, ".venv", "bin", "python")
+        if not os.path.isfile(venv_python):
             logger.warning(
-                "Model checkpoint not found at %s. Download with:\n"
-                "  cd %s && PYTHONPATH=$(pwd) python3 cosmos1/scripts/download_diffusion.py "
-                "--model_sizes 7B --model_types Text2World Video2World",
-                model_dir, self.cosmos_dir,
+                "Cosmos venv not found. Run setup:\n"
+                "  cd %s && uv python install && uv sync --extra=cu130",
+                self.cosmos_dir,
             )
         else:
-            logger.info("Cosmos checkpoint found: %s", model_dir)
+            logger.info("Cosmos venv found at %s", venv_python)
 
         self._loaded = True
-        logger.info("Cosmos video manager ready (model=%s)", self.model_name)
+        logger.info(
+            "Cosmos Predict 2.5 ready (model=%s, dir=%s)",
+            self.model_variant, self.cosmos_dir,
+        )
+
+    def _get_python(self) -> str:
+        """Get the Python binary from the Cosmos venv."""
+        venv_python = os.path.join(self.cosmos_dir, ".venv", "bin", "python")
+        if os.path.isfile(venv_python):
+            return venv_python
+        return "python3"
+
+    def _write_input_json(
+        self,
+        inference_type: str,
+        name: str,
+        prompt: str,
+        input_path: Optional[str] = None,
+    ) -> str:
+        """Write a JSON input file for the inference script."""
+        data = {
+            "inference_type": inference_type,
+            "name": name,
+            "prompt": prompt,
+        }
+        if input_path:
+            data["input_path"] = input_path
+
+        json_path = os.path.join(OUTPUT_DIR, f"{name}_input.json")
+        with open(json_path, "w") as f:
+            json.dump(data, f, indent=2)
+        return json_path
+
+    def _run_inference(
+        self,
+        inference_type: str,
+        name: str,
+        prompt: str,
+        input_path: Optional[str] = None,
+    ) -> Tuple[str, Optional[str]]:
+        """Run cosmos-predict2.5 inference and return (video_path, error)."""
+        json_path = self._write_input_json(inference_type, name, prompt, input_path)
+        output_dir = os.path.join(self.cosmos_dir, "outputs", "flowcut")
+
+        script = os.path.join(self.cosmos_dir, "examples", "inference.py")
+        python = self._get_python()
+
+        cmd = [
+            python, script,
+            "-i", json_path,
+            "-o", output_dir,
+            f"--inference-type={inference_type}",
+            f"--model={self.model_variant}",
+        ]
+
+        env = os.environ.copy()
+        # Ensure HF_HOME is inherited for auto-download
+        if "HF_HOME" not in env:
+            env["HF_HOME"] = os.path.expanduser("~/.cache/huggingface")
+
+        logger.info(
+            "Cosmos %s: name=%s model=%s prompt=%s",
+            inference_type, name, self.model_variant, prompt[:100],
+        )
+        logger.info("CMD: %s", " ".join(cmd))
+
+        try:
+            result = subprocess.run(
+                cmd, cwd=self.cosmos_dir, env=env,
+                capture_output=True, text=True, timeout=INFERENCE_TIMEOUT,
+            )
+            if result.returncode != 0:
+                stderr_tail = result.stderr[-500:] if result.stderr else ""
+                stdout_tail = result.stdout[-500:] if result.stdout else ""
+                logger.error(
+                    "Cosmos %s failed (rc=%d):\nstderr: %s\nstdout: %s",
+                    inference_type, result.returncode, stderr_tail, stdout_tail,
+                )
+                return "", f"Cosmos inference failed: {stderr_tail[-200:]}"
+
+            # Find output video
+            output_path = self._find_output_video(name, output_dir)
+            if output_path:
+                final_path = os.path.join(OUTPUT_DIR, f"{name}.mp4")
+                shutil.copy2(output_path, final_path)
+                logger.info("Video generated: %s", final_path)
+                return final_path, None
+
+            return "", "Cosmos completed but no output video found"
+
+        except subprocess.TimeoutExpired:
+            return "", f"Cosmos inference timed out (>{INFERENCE_TIMEOUT}s)"
+        except Exception as e:
+            logger.error("Cosmos %s error: %s", inference_type, e, exc_info=True)
+            return "", str(e)
+
+    # ── Public API ──────────────────────────────────────────────────
 
     async def generate_text_to_video(
         self,
@@ -100,55 +192,11 @@ class CosmosVideoManager:
         """Generate video from text prompt via Cosmos text2world."""
         if not self._loaded:
             return "", "Cosmos not loaded. Run setup first."
+        name = f"flowcut_t2w_{uuid.uuid4().hex[:8]}"
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._run_text2world, prompt)
-
-    def _run_text2world(self, prompt: str) -> Tuple[str, Optional[str]]:
-        """Run Cosmos text2world inference script."""
-        video_name = f"flowcut_{uuid.uuid4().hex[:8]}"
-        output_subdir = os.path.join(self.cosmos_dir, "outputs")
-        os.makedirs(output_subdir, exist_ok=True)
-
-        script_path = os.path.join(
-            self.cosmos_dir, "cosmos1", "models", "diffusion", "inference", "text2world.py"
+        return await loop.run_in_executor(
+            None, self._run_inference, "text2world", name, prompt, None,
         )
-
-        cmd = [
-            "python3", script_path,
-            "--checkpoint_dir", self.checkpoint_dir,
-            "--diffusion_transformer_dir", self.model_name,
-            "--prompt", prompt,
-            "--video_save_name", video_name,
-            *OFFLOAD_FLAGS,
-        ]
-
-        env = os.environ.copy()
-        env["PYTHONPATH"] = self.cosmos_dir
-
-        logger.info("Cosmos text2world: name=%s prompt=%s", video_name, prompt[:100])
-
-        try:
-            result = subprocess.run(
-                cmd, cwd=self.cosmos_dir, env=env,
-                capture_output=True, text=True, timeout=600,
-            )
-            if result.returncode != 0:
-                logger.error("Cosmos text2world failed:\nstderr: %s", result.stderr[-500:])
-                return "", f"Cosmos inference failed: {result.stderr[-200:]}"
-
-            output_path = self._find_output_video(video_name, output_subdir)
-            if output_path:
-                final_path = os.path.join(OUTPUT_DIR, f"{video_name}.mp4")
-                shutil.copy2(output_path, final_path)
-                logger.info("Video generated: %s", final_path)
-                return final_path, None
-            return "", "Cosmos completed but no output video found"
-
-        except subprocess.TimeoutExpired:
-            return "", "Cosmos inference timed out (>10 min)"
-        except Exception as e:
-            logger.error("Cosmos text2world error: %s", e, exc_info=True)
-            return "", str(e)
 
     async def generate_image_to_video(
         self,
@@ -159,86 +207,24 @@ class CosmosVideoManager:
         height: int = 576,
         num_inference_steps: int = 50,
     ) -> Tuple[str, Optional[str]]:
-        """Generate video from an input image via Cosmos video2world."""
+        """Generate video from an input image via Cosmos image2world."""
         if not self._loaded:
             return "", "Cosmos not loaded."
+
+        # Download remote image to local file
+        local_image = await asyncio.get_event_loop().run_in_executor(
+            None, self._prepare_image, image_path_or_url,
+        )
+        if not local_image:
+            return "", f"Failed to load input image: {image_path_or_url}"
+
+        name = f"flowcut_i2w_{uuid.uuid4().hex[:8]}"
+        effective_prompt = prompt or "Animate this scene with natural cinematic motion"
+
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, self._run_video2world_from_image, image_path_or_url, prompt,
+            None, self._run_inference, "image2world", name, effective_prompt, local_image,
         )
-
-    def _run_video2world_from_image(
-        self, image_input: str, prompt: str
-    ) -> Tuple[str, Optional[str]]:
-        """Run Cosmos video2world with a single image input."""
-        from PIL import Image
-        from io import BytesIO
-        import requests
-
-        # Load input image to local file
-        try:
-            if image_input.startswith("http"):
-                resp = requests.get(image_input, timeout=30)
-                img = Image.open(BytesIO(resp.content))
-            else:
-                img = Image.open(image_input)
-            tmp_img = os.path.join(OUTPUT_DIR, f"input_{uuid.uuid4().hex[:8]}.png")
-            img.convert("RGB").save(tmp_img)
-        except Exception as e:
-            return "", f"Failed to load input image: {e}"
-
-        video_name = f"flowcut_i2v_{uuid.uuid4().hex[:8]}"
-        output_subdir = os.path.join(self.cosmos_dir, "outputs")
-        os.makedirs(output_subdir, exist_ok=True)
-
-        # Try Video2World model
-        v2w_model = self.model_name.replace("Text2World", "Video2World")
-        script_path = os.path.join(
-            self.cosmos_dir, "cosmos1", "models", "diffusion", "inference", "video2world.py"
-        )
-
-        if not os.path.isfile(script_path):
-            logger.warning("video2world script not found, falling back to text2world")
-            enhanced = f"Starting from this scene: {prompt}" if prompt else "Animate this scene"
-            return self._run_text2world(enhanced)
-
-        cmd = [
-            "python3", script_path,
-            "--checkpoint_dir", self.checkpoint_dir,
-            "--diffusion_transformer_dir", v2w_model,
-            "--input_image_or_video_path", tmp_img,
-            "--video_save_name", video_name,
-            *OFFLOAD_FLAGS,
-        ]
-        if prompt:
-            cmd.extend(["--prompt", prompt])
-
-        env = os.environ.copy()
-        env["PYTHONPATH"] = self.cosmos_dir
-
-        logger.info("Cosmos video2world (image): name=%s", video_name)
-
-        try:
-            result = subprocess.run(
-                cmd, cwd=self.cosmos_dir, env=env,
-                capture_output=True, text=True, timeout=600,
-            )
-            if result.returncode != 0:
-                logger.warning("video2world failed, falling back to text2world: %s",
-                               result.stderr[-200:])
-                return self._run_text2world(prompt or "Animate this scene")
-
-            output_path = self._find_output_video(video_name, output_subdir)
-            if output_path:
-                final_path = os.path.join(OUTPUT_DIR, f"{video_name}.mp4")
-                shutil.copy2(output_path, final_path)
-                return final_path, None
-            return "", "No output video found"
-
-        except subprocess.TimeoutExpired:
-            return "", "Cosmos video2world timed out"
-        except Exception as e:
-            return "", str(e)
 
     async def generate_morph_video(
         self,
@@ -258,11 +244,32 @@ class CosmosVideoManager:
             None, self._run_morph, start_image, end_image, prompt,
         )
 
+    # ── Helpers ─────────────────────────────────────────────────────
+
+    def _prepare_image(self, image_input: str) -> Optional[str]:
+        """Download/copy image to a local path Cosmos can read."""
+        from PIL import Image
+        from io import BytesIO
+        import requests
+
+        try:
+            if image_input.startswith("http"):
+                resp = requests.get(image_input, timeout=30)
+                img = Image.open(BytesIO(resp.content))
+            else:
+                img = Image.open(image_input)
+            local_path = os.path.join(OUTPUT_DIR, f"input_{uuid.uuid4().hex[:8]}.png")
+            img.convert("RGB").save(local_path)
+            return local_path
+        except Exception as e:
+            logger.error("Failed to prepare image: %s", e)
+            return None
+
     def _run_morph(
         self, start_img_input: str, end_img_input: str, prompt: str,
     ) -> Tuple[str, Optional[str]]:
         """
-        Generate morph: use Cosmos video2world starting from first frame,
+        Generate morph: use Cosmos image2world starting from first frame,
         then blend the ending frames toward the target end image.
         """
         import numpy as np
@@ -286,12 +293,13 @@ class CosmosVideoManager:
         start_img.save(start_path)
 
         morph_prompt = prompt or "Smoothly transition and transform this scene with fluid cinematic motion"
+        name = f"flowcut_morph_{uuid.uuid4().hex[:8]}"
 
-        # Generate video from start frame
-        video_path, error = self._run_video2world_from_image(start_path, morph_prompt)
+        # Generate video from start frame via image2world
+        video_path, error = self._run_inference("image2world", name, morph_prompt, start_path)
         if error:
-            logger.warning("Image morph failed (%s), trying text2world", error)
-            video_path, error = self._run_text2world(morph_prompt)
+            logger.warning("image2world morph failed (%s), trying text2world", error)
+            video_path, error = self._run_inference("text2world", name, morph_prompt, None)
 
         if error or not video_path:
             return "", error or "Morph generation failed"
@@ -308,7 +316,6 @@ class CosmosVideoManager:
         """Blend the last 25% of frames toward the end image."""
         import numpy as np
         from PIL import Image
-        import tempfile
 
         tmpdir = tempfile.mkdtemp(prefix="morph_blend_")
 
@@ -344,7 +351,7 @@ class CosmosVideoManager:
             "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0",
             video_path,
         ], capture_output=True, text=True)
-        fps = "8"
+        fps = "24"
         if probe.returncode == 0 and "/" in probe.stdout.strip():
             num, den = probe.stdout.strip().split("/")
             fps = str(int(int(num) / max(1, int(den))))
@@ -362,15 +369,25 @@ class CosmosVideoManager:
 
     def _find_output_video(self, video_name: str, output_dir: str) -> Optional[str]:
         """Find the generated video file in Cosmos outputs."""
+        # Check direct match
         for ext in [".mp4", ".avi", ".mkv", ".webm"]:
             candidate = os.path.join(output_dir, f"{video_name}{ext}")
             if os.path.isfile(candidate):
                 return candidate
+
+        # Check in inference-type subdirectories
+        for subdir in ["text2world", "image2world", "video2world"]:
+            for ext in [".mp4", ".avi", ".mkv", ".webm"]:
+                candidate = os.path.join(output_dir, subdir, f"{video_name}{ext}")
+                if os.path.isfile(candidate):
+                    return candidate
+
         # Search recursively
-        for root, dirs, files in os.walk(output_dir):
-            for f in files:
-                if video_name in f and f.endswith((".mp4", ".avi", ".mkv", ".webm")):
-                    return os.path.join(root, f)
+        if os.path.isdir(output_dir):
+            for root, dirs, files in os.walk(output_dir):
+                for f in files:
+                    if video_name in f and f.endswith((".mp4", ".avi", ".mkv", ".webm")):
+                        return os.path.join(root, f)
         return None
 
     async def unload(self):

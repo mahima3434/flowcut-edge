@@ -21,7 +21,7 @@ logger = logging.getLogger("flowcut-edge")
 # Model paths (set by docker-compose or setup.sh)
 TEXT_MODEL = os.getenv("TEXT_MODEL", "nvidia/Nemotron-Mini-4B-Instruct")
 VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
-VIDEO_MODEL = os.getenv("VIDEO_MODEL", "Cosmos-1.0-Diffusion-7B-Text2World")
+VIDEO_MODEL = os.getenv("VIDEO_MODEL", "2B/post-trained")
 
 # Auto-detect CUDA, fall back to CPU
 import torch as _torch

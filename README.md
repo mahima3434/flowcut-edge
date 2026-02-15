@@ -8,7 +8,7 @@ Run NVIDIA AI models on the **ASUS Ascent GX10** (NVIDIA GB10 Blackwell) for Flo
 |-------|------|------|
 | **Nemotron-Mini 4B** | Text/reasoning, tool calling | ~8 GB |
 | **Phi-3.5 Vision** | Image understanding, scene description | ~8 GB |
-| **NVIDIA Cosmos 1.0 Diffusion 7B** | Text-to-video, image-to-video, morph transitions | ~14 GB |
+| **Cosmos Predict 2.5 (2B)** | Text-to-video, image-to-video, morph transitions | ~4 GB |
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ This installs dependencies and downloads the text/vision models.
 bash setup_cosmos.sh
 ```
 
-This clones the [NVIDIA Cosmos](https://github.com/NVIDIA/Cosmos) repo, authenticates with HuggingFace, and downloads the 7B diffusion checkpoints (~14 GB).
+This clones [nvidia-cosmos/cosmos-predict2.5](https://github.com/nvidia-cosmos/cosmos-predict2.5), sets up the Python environment with CUDA 13.0, and authenticates with HuggingFace. Model checkpoints (~4 GB for 2B) auto-download on first inference.
 
 ### 3. Start the server
 
@@ -79,7 +79,7 @@ FlowCut Desktop App
 ├─────────────────────────────┤
 │ Nemotron-Mini 4B  (text)    │
 │ Phi-3.5 Vision   (vision)   │
-│ Cosmos 7B        (video)    │
+│ Cosmos 2.5-2B    (video)    │
 └─────────────────────────────┘
       ASUS Ascent GX10
      NVIDIA GB10 Blackwell
@@ -100,8 +100,8 @@ FlowCut Desktop App
 |----------|---------|-------------|
 | `TEXT_MODEL` | `nvidia/Nemotron-Mini-4B-Instruct` | HF text model ID |
 | `VISION_MODEL` | `microsoft/Phi-3.5-vision-instruct` | HF vision model ID |
-| `VIDEO_MODEL` | `Cosmos-1.0-Diffusion-7B-Text2World` | Cosmos checkpoint dir name |
-| `COSMOS_DIR` | `~/Cosmos` | Path to cloned Cosmos repo |
+| `VIDEO_MODEL` | `2B/post-trained` | Cosmos model variant (`2B/post-trained`, `2B/distilled`, `14B/post-trained`) |
+| `COSMOS_DIR` | `~/cosmos-predict2.5` | Path to cloned cosmos-predict2.5 repo |
 | `DEVICE` | auto-detect | `cuda` or `cpu` |
 
 ## FlowCut Integration
