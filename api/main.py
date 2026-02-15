@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routes.chat import router as chat_router
 from api.routes.models import router as models_router
 from api.routes.health import router as health_router
+from api.routes.video import router as video_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("flowcut-edge")
@@ -20,6 +21,7 @@ logger = logging.getLogger("flowcut-edge")
 # Model paths (set by docker-compose or setup.sh)
 TEXT_MODEL = os.getenv("TEXT_MODEL", "nvidia/Nemotron-Mini-4B-Instruct")
 VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
+VIDEO_MODEL = os.getenv("VIDEO_MODEL", "nvidia/Cosmos-1.0-Diffusion-7B-Text2World")
 
 # Auto-detect CUDA, fall back to CPU
 import torch as _torch
@@ -33,6 +35,7 @@ async def lifespan(app: FastAPI):
     logger.info("=== FlowCut Edge starting on NVIDIA Jetson ===")
     logger.info(f"Text model:   {TEXT_MODEL}")
     logger.info(f"Vision model: {VISION_MODEL}")
+    logger.info(f"Video model:  {VIDEO_MODEL}")
     logger.info(f"Device:       {DEVICE}")
 
     # Lazy import so the app can still start if deps are missing
@@ -41,11 +44,23 @@ async def lifespan(app: FastAPI):
     await manager.load_models(TEXT_MODEL, VISION_MODEL, DEVICE)
     app.state.model_manager = manager
 
-    logger.info("=== Models loaded, ready to serve ===")
+    # Load Cosmos video generation model
+    from api.cosmos_manager import CosmosVideoManager
+    cosmos = CosmosVideoManager()
+    try:
+        await cosmos.load_model(VIDEO_MODEL, DEVICE)
+        logger.info("=== Cosmos video model loaded ===")
+    except Exception as e:
+        logger.warning("Cosmos video model failed to load: %s (video gen disabled)", e)
+    app.state.cosmos_manager = cosmos
+
+    logger.info("=== All models loaded, ready to serve ===")
     yield
 
     logger.info("=== Shutting down, releasing models ===")
     await manager.unload()
+    if hasattr(app.state, 'cosmos_manager'):
+        await app.state.cosmos_manager.unload()
 
 
 app = FastAPI(
@@ -65,3 +80,4 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(models_router, prefix="/v1")
 app.include_router(chat_router, prefix="/v1")
+app.include_router(video_router, prefix="/v1")
