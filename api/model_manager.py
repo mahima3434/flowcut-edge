@@ -106,7 +106,18 @@ class ModelManager:
             AutoTokenizer,
             AutoImageProcessor,
             AutoModelForCausalLM,
+            LlavaConfig,       # <--- ADD THIS
+            CONFIG_MAPPING,    # <--- ADD THIS
         )
+
+        # ---------------------------------------------------------------------
+        # PATCH: Register 'llava_llama' so AutoConfig doesn't crash
+        # ---------------------------------------------------------------------
+        try:
+            CONFIG_MAPPING["llava_llama"] = LlavaConfig
+        except Exception as e:
+            logger.warning(f"Could not patch CONFIG_MAPPING: {e}")
+        # ---------------------------------------------------------------------
 
         # ---- Processor (robust) --------------------------------------------
         try:
@@ -139,9 +150,12 @@ class ModelManager:
         dtype = torch.float16 if self._device == "cuda" else torch.float32
         device_map = "auto" if self._device == "cuda" else None
 
+        # Now this line won't crash because we patched CONFIG_MAPPING above
         config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
-        if getattr(config, "model_type", None) == "llava_lama":
-            logger.warning("LLava-Llama model detected. Using Llama model type.")
+        
+        # We still normalize the name to "llava" so the rest of the pipeline is happy
+        if getattr(config, "model_type", None) == "llava_llama":
+            logger.info("Legacy 'llava_llama' model detected. Normalizing to 'llava'.")
             config.model_type = "llava"
 
         self._model = AutoModelForCausalLM.from_pretrained(
