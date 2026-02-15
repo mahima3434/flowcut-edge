@@ -1,6 +1,6 @@
 """
-FlowCut Edge — NanoVLM Vision Server
-Serves NVIDIA NanoVLM (VILA-1.5-3B) on the GB10 with an OpenAI-compatible API.
+FlowCut Edge — Phi-3.5 Vision Server
+Serves Microsoft Phi-3.5-vision-instruct on the GB10 with an OpenAI-compatible API.
 Cosmos video generation is disabled (video gen handled by Runway on the client).
 """
 
@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("flowcut-edge")
 
 # Model config (override via env vars)
-VISION_MODEL = os.getenv("VISION_MODEL", "Efficient-Large-Model/VILA1.5-3b")
+VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
 
 # Auto-detect CUDA
 import torch as _torch
@@ -30,7 +30,7 @@ DEVICE = os.getenv("DEVICE", _default_device)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load NanoVLM on startup, release on shutdown."""
+    """Load Phi-3.5 Vision on startup, release on shutdown."""
     logger.info("=== FlowCut Edge starting on NVIDIA GB10 ===")
     logger.info(f"Vision model: {VISION_MODEL}")
     logger.info(f"Device:       {DEVICE}")
@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
         manager = ModelManager()
         await manager.load_models(model_id=VISION_MODEL, device=DEVICE)
     except Exception as e:
-        logger.exception("CRITICAL: Failed to load NanoVLM: %s", e)
+        logger.exception("CRITICAL: Failed to load vision model: %s", e)
         class DummyManager:
             is_loaded = False
             load_error = f"Startup failed: {e}"
@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     #     logger.warning("Cosmos video model failed: %s", e)
     # app.state.cosmos_manager = cosmos
 
-    logger.info("=== NanoVLM ready, serving requests ===")
+    logger.info("=== Phi-3.5 Vision ready, serving requests ===")
     yield
 
     logger.info("=== Shutting down, releasing models ===")
@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="FlowCut Edge",
-    description="NanoVLM Vision Server for FlowCut (GB10 Blackwell)",
+    description="Phi-3.5 Vision Server for FlowCut (GB10 Blackwell)",
     version="2.0.0",
     lifespan=lifespan,
 )

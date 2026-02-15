@@ -1,5 +1,5 @@
 """
-Model manager — NanoVLM (VILA 1.5-3B) vision model on GB10.
+Model manager — Phi-3.5 Vision on GB10.
 Handles loading, inference, and unloading of the vision-language model.
 """
 
@@ -14,7 +14,7 @@ import torch
 logger = logging.getLogger("flowcut-edge")
 
 # ── Default model ────────────────────────────────────────────────────
-DEFAULT_MODEL_ID = "models/VILA1.5-3b"
+DEFAULT_MODEL_ID = "microsoft/Phi-3.5-vision-instruct"
 
 
 class _ProcessorShim:
@@ -61,7 +61,7 @@ class _ProcessorShim:
 
 class ModelManager:
     """
-    Manages NanoVLM (VILA-1.5-3B) for vision + text tasks.
+    Manages Phi-3.5 Vision for vision + text tasks.
     Provides generate_vision() and generate_text() methods used by the chat route.
     """
 
@@ -81,21 +81,21 @@ class ModelManager:
         vision_model_id: str = "",  # ignored — single model handles both
         device: str = "cuda",
     ):
-        """Load the NanoVLM model."""
+        """Load the vision model."""
         self._device = device
         self.model_id = model_id if model_id and model_id != "disabled" else DEFAULT_MODEL_ID
 
-        logger.info("Loading NanoVLM model: %s on %s", self.model_id, self._device)
+        logger.info("Loading vision model: %s on %s", self.model_id, self._device)
 
         try:
             await asyncio.to_thread(self._load_sync)
             self._loaded = True
             self.load_error = None
-            logger.info("NanoVLM model loaded ✓")
+            logger.info("Vision model loaded ✓")
         except Exception as e:
             self._loaded = False
             self.load_error = str(e)
-            logger.error("Failed to load NanoVLM: %s", e, exc_info=True)
+            logger.error("Failed to load vision model: %s", e, exc_info=True)
             raise
 
     def _load_sync(self):
@@ -312,7 +312,7 @@ class ModelManager:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         self._loaded = False
-        logger.info("NanoVLM model unloaded")
+        logger.info("Vision model unloaded")
 
     @property
     def is_loaded(self) -> bool:
@@ -321,6 +321,6 @@ class ModelManager:
     def available_models(self) -> List[Dict[str, str]]:
         if self._loaded:
             return [
-                {"id": "nanovlm", "object": "model", "owned_by": "nvidia-edge"},
+                {"id": "phi-3.5-vision", "object": "model", "owned_by": "microsoft"},
             ]
         return []
