@@ -1,6 +1,6 @@
 """
-FlowCut Edge — Phi-3.5 Vision Server
-Serves Microsoft Phi-3.5-vision-instruct on the GB10 with an OpenAI-compatible API.
+FlowCut Edge — LLaVA Vision Server
+Serves LLaVA-NeXT (LLaVA 1.6) on the GB10 with an OpenAI-compatible API.
 Cosmos video generation is disabled (video gen handled by Runway on the client).
 """
 
@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("flowcut-edge")
 
 # Model config (override via env vars)
-VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
+VISION_MODEL = os.getenv("VISION_MODEL", "llava-hf/llava-v1.6-mistral-7b-hf")
 
 # Auto-detect CUDA
 import torch as _torch
@@ -30,7 +30,7 @@ DEVICE = os.getenv("DEVICE", _default_device)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load Phi-3.5 Vision on startup, release on shutdown."""
+    """Load LLaVA on startup, release on shutdown."""
     logger.info("=== FlowCut Edge starting on NVIDIA GB10 ===")
     logger.info(f"Vision model: {VISION_MODEL}")
     logger.info(f"Device:       {DEVICE}")
@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     #     logger.warning("Cosmos video model failed: %s", e)
     # app.state.cosmos_manager = cosmos
 
-    logger.info("=== Phi-3.5 Vision ready, serving requests ===")
+    logger.info("=== LLaVA ready, serving requests ===")
     yield
 
     logger.info("=== Shutting down, releasing models ===")
@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="FlowCut Edge",
-    description="Phi-3.5 Vision Server for FlowCut (GB10 Blackwell)",
+    description="LLaVA Vision Server for FlowCut (GB10 Blackwell)",
     version="2.0.0",
     lifespan=lifespan,
 )

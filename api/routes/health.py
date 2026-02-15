@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/health")
 async def health(request: Request):
-    """Health check — shows Phi-3.5 Vision status and GPU info."""
+    """Health check — shows LLaVA status and GPU info."""
     manager = request.app.state.model_manager
 
     gpu_info = {}

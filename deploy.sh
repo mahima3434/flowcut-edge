@@ -41,8 +41,8 @@ pip install --quiet --upgrade pip
 log "Installing Python dependencies..."
 pip install --quiet -r requirements.txt
 
-# ── Pre-download Phi-3.5 Vision model ────────────────────────────────────────
-log "Pre-downloading Phi-3.5 Vision..."
+# ── Pre-download LLaVA-NeXT model ────────────────────────────────────────
+log "Pre-downloading LLaVA-NeXT..."
 python3 -c "
 from huggingface_hub import snapshot_download
 import os
@@ -50,8 +50,8 @@ import os
 cache = os.path.expanduser('~/.cache/huggingface/hub')
 os.makedirs(cache, exist_ok=True)
 
-print('Downloading microsoft/Phi-3.5-vision-instruct...')
-snapshot_download('microsoft/Phi-3.5-vision-instruct', cache_dir=cache)
+print('Downloading llava-hf/llava-v1.6-mistral-7b-hf...')
+snapshot_download('llava-hf/llava-v1.6-mistral-7b-hf', cache_dir=cache)
 print('Done!')
 "
 

@@ -1,5 +1,5 @@
 """
-Model manager — Phi-3.5 Vision on GB10.
+Model manager — LLaVA-NeXT (LLaVA 1.6) vision-language model on GB10.
 Handles loading, inference, and unloading of the vision-language model.
 """
 
@@ -14,54 +14,12 @@ import torch
 logger = logging.getLogger("flowcut-edge")
 
 # ── Default model ────────────────────────────────────────────────────
-DEFAULT_MODEL_ID = "microsoft/Phi-3.5-vision-instruct"
-
-
-class _ProcessorShim:
-    """
-    A small wrapper that behaves like a processor:
-      - __call__(text=..., images=...) -> dict of tensors
-      - decode(ids) -> string
-      - apply_chat_template(msgs, add_generation_prompt=True) if tokenizer supports it
-    """
-
-    def __init__(self, tokenizer, image_processor):
-        self.tokenizer = tokenizer
-        self.image_processor = image_processor
-
-    def apply_chat_template(self, msgs, add_generation_prompt: bool = True):
-        if hasattr(self.tokenizer, "apply_chat_template"):
-            return self.tokenizer.apply_chat_template(
-                msgs, add_generation_prompt=add_generation_prompt, tokenize=False
-            )
-        # Fallback: join message contents
-        return "\n".join(m.get("content", "") for m in msgs if isinstance(m, dict))
-
-    def __call__(self, text=None, images=None, return_tensors="pt", **kwargs):
-        out: Dict[str, torch.Tensor] = {}
-
-        if text is not None:
-            tok = self.tokenizer(
-                text,
-                return_tensors=return_tensors,
-                padding=False,
-                truncation=False,
-            )
-            out.update(tok)
-
-        if images is not None:
-            img = self.image_processor(images=images, return_tensors=return_tensors)
-            out.update(img)
-
-        return out
-
-    def decode(self, ids, skip_special_tokens: bool = True) -> str:
-        return self.tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+DEFAULT_MODEL_ID = "llava-hf/llava-v1.6-mistral-7b-hf"
 
 
 class ModelManager:
     """
-    Manages Phi-3.5 Vision for vision + text tasks.
+    Manages LLaVA-NeXT for vision + text tasks.
     Provides generate_vision() and generate_text() methods used by the chat route.
     """
 
@@ -100,73 +58,17 @@ class ModelManager:
 
     def _load_sync(self):
         """Synchronous model loading (run in thread)."""
-        from transformers import (
-            AutoConfig,
-            AutoProcessor,
-            AutoTokenizer,
-            AutoImageProcessor,
-            AutoModelForCausalLM,
-            LlavaConfig,       # <--- ADD THIS
-            CONFIG_MAPPING,    # <--- ADD THIS
-        )
+        from transformers import LlavaNextForConditionalGeneration, AutoProcessor
 
-        # ---------------------------------------------------------------------
-        # PATCH: Register 'llava_llama' so AutoConfig doesn't crash
-        # ---------------------------------------------------------------------
-        try:
-            CONFIG_MAPPING["llava_llama"] = LlavaConfig
-        except Exception as e:
-            logger.warning(f"Could not patch CONFIG_MAPPING: {e}")
-        # ---------------------------------------------------------------------
+        self._processor = AutoProcessor.from_pretrained(self.model_id)
 
-        # ---- Processor (robust) --------------------------------------------
-        try:
-            # Works for models that ship a root-level processor config
-            self._processor = AutoProcessor.from_pretrained(
-                self.model_id, trust_remote_code=True
-            )
-            logger.info("Loaded processor via AutoProcessor")
-        except Exception as e:
-            logger.warning(
-                "AutoProcessor failed (%s). Falling back to llm/ + vision_tower/ loaders.",
-                str(e),
-            )
-
-            tokenizer = AutoTokenizer.from_pretrained(
-                self.model_id,
-                subfolder="llm",
-                trust_remote_code=True,
-                use_fast=False,
-            )
-            image_processor = AutoImageProcessor.from_pretrained(
-                self.model_id,
-                subfolder="vision_tower",
-                trust_remote_code=True,
-            )
-            self._processor = _ProcessorShim(tokenizer=tokenizer, image_processor=image_processor)
-            logger.info("Loaded processor via fallback shim (llm/ + vision_tower/)")
-
-        # ---- Model ----------------------------------------------------------
-        dtype = torch.float16 if self._device == "cuda" else torch.float32
-        device_map = "auto" if self._device == "cuda" else None
-
-        # Now this line won't crash because we patched CONFIG_MAPPING above
-        config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
-        
-        # We still normalize the name to "llava" so the rest of the pipeline is happy
-        if getattr(config, "model_type", None) == "llava_llama":
-            logger.info("Legacy 'llava_llama' model detected. Normalizing to 'llava'.")
-            config.model_type = "llava"
-
-        self._model = AutoModelForCausalLM.from_pretrained(
+        self._model = LlavaNextForConditionalGeneration.from_pretrained(
             self.model_id,
-            config=config,
-            torch_dtype=dtype,
-            device_map=device_map,
-            trust_remote_code=True,
-            attn_implementation="eager",
+            torch_dtype=torch.float16 if self._device == "cuda" else torch.float32,
+            device_map="auto" if self._device == "cuda" else None,
+            low_cpu_mem_usage=True,
         )
-        logger.info("Loaded as CasualLM model")
+        logger.info("Loaded LLaVA-NeXT model")
 
     # ── Inference ────────────────────────────────────────────────────
 
@@ -203,11 +105,6 @@ class ModelManager:
         )
         return {"content": content, "finish_reason": "stop"}
 
-    def _to_device(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Move tensor dict to the model device."""
-        dev = self._model.device if self._model is not None else self._device
-        return {k: (v.to(dev) if hasattr(v, "to") else v) for k, v in inputs.items()}
-
     def _generate_sync(
         self,
         text: str,
@@ -215,39 +112,37 @@ class ModelManager:
         max_tokens: int = 1024,
         temperature: float = 0.7,
     ) -> str:
-        """Synchronous generation for Phi-3.5 Vision."""
+        """Synchronous generation for LLaVA-NeXT."""
         try:
-            # Build content with <|image_N|> placeholders for each image
+            # LLaVA-NeXT uses <image> token in the conversation content
             if images:
-                placeholders = "".join(
-                    f"<|image_{i+1}|>\n" for i in range(len(images))
-                )
-                user_content = f"{placeholders}{text}"
+                # Insert one <image> tag per image before the text
+                image_tags = "\n".join(["<image>"] * len(images))
+                user_content = f"{image_tags}\n{text}"
             else:
                 user_content = text
 
-            msgs = [{"role": "user", "content": user_content}]
+            conversation = [
+                {"role": "user", "content": user_content},
+            ]
 
-            # Phi-3.5 Vision: use processor.tokenizer for chat template
-            tokenizer = getattr(self._processor, "tokenizer", self._processor)
-            prompt = tokenizer.apply_chat_template(
-                msgs, tokenize=False, add_generation_prompt=True
+            # Apply chat template
+            prompt = self._processor.apply_chat_template(
+                conversation, add_generation_prompt=True
             )
 
-            # Build processor inputs
+            # Build inputs
             if images:
                 inputs = self._processor(
                     text=prompt,
                     images=images,
                     return_tensors="pt",
-                )
+                ).to(self._model.device)
             else:
                 inputs = self._processor(
                     text=prompt,
                     return_tensors="pt",
-                )
-
-            inputs = self._to_device(inputs)
+                ).to(self._model.device)
 
             with torch.no_grad():
                 output_ids = self._model.generate(
@@ -257,7 +152,8 @@ class ModelManager:
                     do_sample=temperature > 0.01,
                 )
 
-            input_len = inputs.get("input_ids", torch.tensor([])).shape[-1] if "input_ids" in inputs else 0
+            # Decode only new tokens (skip the prompt)
+            input_len = inputs["input_ids"].shape[-1]
             generated = output_ids[0][input_len:]
             return self._processor.decode(generated, skip_special_tokens=True).strip()
 
@@ -295,13 +191,19 @@ class ModelManager:
 
     @staticmethod
     def _decode_image(data_url: str):
-        """Decode base64 data URL to PIL Image."""
+        """Decode base64 data URL or URL to PIL Image."""
         from PIL import Image
+
         if data_url.startswith("data:"):
             _, encoded = data_url.split(",", 1)
+            return Image.open(io.BytesIO(base64.b64decode(encoded))).convert("RGB")
+        elif data_url.startswith("http://") or data_url.startswith("https://"):
+            import requests
+            resp = requests.get(data_url, timeout=10)
+            resp.raise_for_status()
+            return Image.open(io.BytesIO(resp.content)).convert("RGB")
         else:
-            encoded = data_url
-        return Image.open(io.BytesIO(base64.b64decode(encoded))).convert("RGB")
+            return Image.open(io.BytesIO(base64.b64decode(data_url))).convert("RGB")
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -325,6 +227,6 @@ class ModelManager:
     def available_models(self) -> List[Dict[str, str]]:
         if self._loaded:
             return [
-                {"id": "phi-3.5-vision", "object": "model", "owned_by": "microsoft"},
+                {"id": "llava-v1.6", "object": "model", "owned_by": "llava-hf"},
             ]
         return []

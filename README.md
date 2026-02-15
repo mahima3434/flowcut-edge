@@ -6,8 +6,7 @@ Run NVIDIA AI models on the **ASUS Ascent GX10** (NVIDIA GB10 Blackwell) for Flo
 
 | Model | Task | Size |
 |-------|------|------|
-| **Nemotron-Mini 4B** | Text/reasoning, tool calling | ~8 GB |
-| **Phi-3.5 Vision** | Image understanding, scene description | ~8 GB |
+| **LLaVA-NeXT 7B** | Image understanding, scene description | ~14 GB |
 | **Cosmos Predict 2.5 (2B)** | Text-to-video, image-to-video, morph transitions | ~4 GB |
 
 ## Quick Start
@@ -77,9 +76,8 @@ FlowCut Desktop App
 │   FlowCut Edge (FastAPI)    │
 │   http://<gx10-ip>:8000     │
 ├─────────────────────────────┤
-│ Nemotron-Mini 4B  (text)    │
-│ Phi-3.5 Vision   (vision)   │
-│ Cosmos 2.5-2B    (video)    │
+│ LLaVA-NeXT 7B    (vision)    │
+│ Runway           (video/cloud)│
 └─────────────────────────────┘
       ASUS Ascent GX10
      NVIDIA GB10 Blackwell
@@ -98,16 +96,13 @@ FlowCut Desktop App
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TEXT_MODEL` | `nvidia/Nemotron-Mini-4B-Instruct` | HF text model ID |
-| `VISION_MODEL` | `microsoft/Phi-3.5-vision-instruct` | HF vision model ID |
-| `VIDEO_MODEL` | `2B/pre-trained` | Cosmos model variant (`2B/pre-trained`, `2B/distilled`, `14B/pre-trained`) |
-| `COSMOS_DIR` | `~/cosmos-predict2.5` | Path to cloned cosmos-predict2.5 repo |
+| `VISION_MODEL` | `llava-hf/llava-v1.6-mistral-7b-hf` | HF vision model ID |
 | `DEVICE` | auto-detect | `cuda` or `cpu` |
 
 ## FlowCut Integration
 
 In FlowCut settings, set:
-- **AI Model**: `nvidia-edge/nemotron-mini-4b`
+- **AI Model**: `llava-v1.6`
 - **NVIDIA Edge API URL**: `http://<device-ip>:8000/v1`
 
 The app will automatically use the edge device for all AI operations, falling back to cloud providers if the device is unreachable.

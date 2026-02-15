@@ -6,7 +6,7 @@
 # What this does:
 #   1. Installs system deps (python3, git)
 #   2. Creates a Python venv + installs PyTorch & dependencies
-#   3. Pre-downloads the Phi-3.5 Vision model
+#   3. Pre-downloads the LLaVA-NeXT vision model
 #
 # No Docker required — runs directly on the device.
 # ============================================================================
@@ -22,7 +22,7 @@ warn()  { echo -e "${YELLOW}[flowcut-edge]${NC} $*"; }
 error() { echo -e "${RED}[flowcut-edge]${NC} $*" >&2; }
 
 # ── System info ─────────────────────────────────────────────────────
-log "=== FlowCut Edge — Phi-3.5 Vision Setup ==="
+log "=== FlowCut Edge — LLaVA Setup ==="
 if [[ -f /proc/device-tree/model ]]; then
     MODEL=$(tr -d '\0' < /proc/device-tree/model)
     log "Detected: $MODEL"
@@ -44,7 +44,7 @@ fi
 TOTAL_MEM=$(free -g | awk '/^Mem:/{print $2}')
 log "Total memory: ${TOTAL_MEM}GB"
 if (( TOTAL_MEM < 8 )); then
-    warn "Low memory (${TOTAL_MEM}GB). Phi-3.5 Vision needs ~6GB+"
+    warn "Low memory (${TOTAL_MEM}GB). LLaVA-NeXT needs ~8GB+"
 fi
 
 # ── Install system deps (no Docker) ────────────────────────────────
@@ -95,8 +95,8 @@ fi
 # ── Install Python dependencies ─────────────────────────────────────
 pip install --quiet -r requirements.txt
 
-# ── Pre-download Phi-3.5 Vision model ────────────────────────────────────────
-log "Pre-downloading Phi-3.5 Vision model..."
+# ── Pre-download LLaVA-NeXT model ────────────────────────────────────────
+log "Pre-downloading LLaVA-NeXT model..."
 python3 -c "
 from huggingface_hub import snapshot_download
 import os
@@ -104,8 +104,8 @@ import os
 cache = os.path.expanduser('~/.cache/huggingface/hub')
 os.makedirs(cache, exist_ok=True)
 
-print('Downloading microsoft/Phi-3.5-vision-instruct...')
-snapshot_download('microsoft/Phi-3.5-vision-instruct', cache_dir=cache)
+print('Downloading llava-hf/llava-v1.6-mistral-7b-hf...')
+snapshot_download('llava-hf/llava-v1.6-mistral-7b-hf', cache_dir=cache)
 print('Done!')
 "
 
