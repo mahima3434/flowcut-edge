@@ -14,7 +14,7 @@ import torch
 logger = logging.getLogger("flowcut-edge")
 
 # ── Default model ────────────────────────────────────────────────────
-DEFAULT_MODEL_ID = "Efficient-Large-Model/VILA1.5-3b"
+DEFAULT_MODEL_ID = "models/VILA1.5-3b"
 
 
 class _ProcessorShim:
