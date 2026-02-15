@@ -157,14 +157,14 @@ class ModelManager:
         if getattr(config, "model_type", None) == "llava_llama":
             logger.info("Legacy 'llava_llama' model detected. Normalizing to 'llava'.")
             config.model_type = "llava"
-        ATTN_IMPL = "sdpa"
+
         self._model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
             config=config,
             torch_dtype=dtype,
             device_map=device_map,
             trust_remote_code=True,
-            attn_implementation=ATTN_IMPL,
+            attn_implementation="eager",
         )
         logger.info("Loaded as CasualLM model")
 
