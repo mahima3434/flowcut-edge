@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# FlowCut Edge — Quick Deploy (no Docker, direct install)
+# FlowCut Edge — Quick Deploy (direct install, no Docker)
 # Run this ON the ASUS Ascent GX10 device.
 # ============================================================================
 set -euo pipefail
@@ -41,8 +41,8 @@ pip install --quiet --upgrade pip
 log "Installing Python dependencies..."
 pip install --quiet -r requirements.txt
 
-# ── Pre-download models ────────────────────────────────────────────
-log "Pre-downloading models (this takes a few minutes on first run)..."
+# ── Pre-download NanoVLM model ──────────────────────────────────────
+log "Pre-downloading NanoVLM (VILA 1.5-3B)..."
 python3 -c "
 from huggingface_hub import snapshot_download
 import os
@@ -50,24 +50,15 @@ import os
 cache = os.path.expanduser('~/.cache/huggingface/hub')
 os.makedirs(cache, exist_ok=True)
 
-print('Downloading Nemotron-Mini 4B...')
-snapshot_download('nvidia/Nemotron-Mini-4B-Instruct', cache_dir=cache)
-
-print('Downloading Phi-3.5 Vision...')
-snapshot_download('microsoft/Phi-3.5-vision-instruct', cache_dir=cache)
-
+print('Downloading Efficient-Large-Model/VILA1.5-3b...')
+snapshot_download('Efficient-Large-Model/VILA1.5-3b', cache_dir=cache)
 print('Done!')
 "
 
-# ── Get device IP ───────────────────────────────────────────────────
+# ── Done ────────────────────────────────────────────────────────────
 DEVICE_IP=$(hostname -I | awk '{print $1}')
 
-# ── Cosmos video generation (optional) ──────────────────────────────
 log ""
-log "To enable NVIDIA Cosmos video generation:"
-log "  bash setup_cosmos.sh"
-log ""
-
 log "=========================================="
 log "  Deploy complete!"
 log "=========================================="

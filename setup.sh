@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================================
-# FlowCut Edge — One-command setup for NVIDIA Jetson (ASUS Ascent GX10)
-# Run this ON the Jetson device.
+# FlowCut Edge — Setup for NVIDIA GB10 (ASUS Ascent GX10)
+# Run this ON the GX10 device.
+#
+# What this does:
+#   1. Installs system deps (python3, git)
+#   2. Creates a Python venv + installs PyTorch & dependencies
+#   3. Pre-downloads the NanoVLM (VILA 1.5-3B) model
+#
+# No Docker required — runs directly on the device.
 # ============================================================================
 set -euo pipefail
 
@@ -14,14 +21,13 @@ log()   { echo -e "${GREEN}[flowcut-edge]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[flowcut-edge]${NC} $*"; }
 error() { echo -e "${RED}[flowcut-edge]${NC} $*" >&2; }
 
-# ── Check we're on a Jetson ─────────────────────────────────────────
-log "Checking hardware..."
+# ── System info ─────────────────────────────────────────────────────
+log "=== FlowCut Edge — NanoVLM Setup ==="
 if [[ -f /proc/device-tree/model ]]; then
     MODEL=$(tr -d '\0' < /proc/device-tree/model)
     log "Detected: $MODEL"
 else
-    warn "Could not detect Jetson hardware (not critical, continuing)"
-    MODEL="unknown"
+    log "Hardware: $(cat /proc/device-tree/model 2>/dev/null || echo 'NVIDIA GPU system')"
 fi
 
 # ── Check CUDA ──────────────────────────────────────────────────────
@@ -37,11 +43,11 @@ fi
 # ── Check memory ────────────────────────────────────────────────────
 TOTAL_MEM=$(free -g | awk '/^Mem:/{print $2}')
 log "Total memory: ${TOTAL_MEM}GB"
-if (( TOTAL_MEM < 30 )); then
-    warn "Low memory (${TOTAL_MEM}GB). Phi-3.5 Vision + Nemotron-Mini 4B need ~20GB+"
+if (( TOTAL_MEM < 8 )); then
+    warn "Low memory (${TOTAL_MEM}GB). NanoVLM needs ~6GB+"
 fi
 
-# ── Install system deps ────────────────────────────────────────────
+# ── Install system deps (no Docker) ────────────────────────────────
 log "Installing system dependencies..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
@@ -49,40 +55,9 @@ sudo apt-get install -y -qq \
     python3-venv \
     git \
     curl \
-    docker.io \
-    docker-compose \
     2>/dev/null || true
 
-# ── Ensure user can run Docker ──────────────────────────────────────
-if ! groups | grep -q docker; then
-    log "Adding user to docker group..."
-    sudo usermod -aG docker "$USER"
-    warn "You may need to log out and back in for Docker permissions"
-fi
-
-# ── Set NVIDIA runtime as default for Docker ────────────────────────
-if [[ -f /etc/nvidia-container-runtime/config.toml ]]; then
-    log "NVIDIA Container Runtime detected"
-else
-    log "Installing NVIDIA Container Toolkit..."
-    distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
-    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-        sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-    curl -s -L "https://nvidia.github.io/libnvidia-container/${distribution}/libnvidia-container.list" | \
-        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-        sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq nvidia-container-toolkit 2>/dev/null || true
-    sudo nvidia-ctk runtime configure --runtime=docker
-    sudo systemctl restart docker
-fi
-
-# ── Create model cache directory ────────────────────────────────────
-CACHE_DIR="$HOME/.cache/flowcut-edge"
-mkdir -p "$CACHE_DIR"
-log "Model cache: $CACHE_DIR"
-
-# ── Python venv (for non-Docker development) ────────────────────────
+# ── Python venv ─────────────────────────────────────────────────────
 if [[ ! -d ".venv" ]]; then
     log "Creating Python virtual environment..."
     python3 -m venv .venv
@@ -90,54 +65,67 @@ fi
 source .venv/bin/activate
 pip install --quiet --upgrade pip
 
-# ── Install PyTorch (Jetson needs NVIDIA's wheel, not PyPI) ─────────
+# ── Install PyTorch (Jetson needs NVIDIA's wheel) ───────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-    log "PyTorch with CUDA already installed, skipping"
+    log "PyTorch with CUDA already installed ✓"
 else
     ARCH=$(uname -m)
     if [[ "$ARCH" == "aarch64" ]]; then
-        log "Jetson (aarch64) detected — installing NVIDIA PyTorch wheel..."
-        # JetPack 6.x / L4T R36 ships CUDA 12.x
-        # Official NVIDIA wheel index for Jetson:
-        TORCH_URL="https://developer.download.nvidia.com/compute/redist/jp/v60/pytorch/torch-2.3.0a0+ebedce2.nv24.02-cp310-cp310-linux_aarch64.whl"
-        # Try the NVIDIA pip index first (covers multiple JetPack versions)
+        log "aarch64 detected — installing NVIDIA PyTorch wheel..."
         pip install --quiet torch torchvision \
             --extra-index-url https://pypi.jetson-ai-lab.dev \
             2>/dev/null \
-        || pip install --quiet "$TORCH_URL" \
-            2>/dev/null \
         || {
-            error "Could not install Jetson PyTorch automatically."
-            error "Please install manually from: https://forums.developer.nvidia.com/t/pytorch-for-jetson/"
-            error "Then re-run this script."
+            error "Auto-install failed. Install PyTorch manually:"
+            error "  https://forums.developer.nvidia.com/t/pytorch-for-jetson/"
             exit 1
         }
     else
         log "x86_64 detected — installing PyTorch from PyPI..."
-        pip install --quiet torch
+        pip install --quiet torch torchvision
     fi
-    # Verify
+
     if python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')" 2>/dev/null; then
-        log "PyTorch installed successfully"
+        log "PyTorch installed ✓"
     else
         warn "PyTorch installed but CUDA may not be available"
     fi
 fi
 
+# ── Install Python dependencies ─────────────────────────────────────
 pip install --quiet -r requirements.txt
+
+# ── Pre-download NanoVLM model ──────────────────────────────────────
+log "Pre-downloading NanoVLM (VILA 1.5-3B) model..."
+python3 -c "
+from huggingface_hub import snapshot_download
+import os
+
+cache = os.path.expanduser('~/.cache/huggingface/hub')
+os.makedirs(cache, exist_ok=True)
+
+print('Downloading Efficient-Large-Model/VILA1.5-3b...')
+snapshot_download('Efficient-Large-Model/VILA1.5-3b', cache_dir=cache)
+print('Done!')
+"
+
+# ── Done ────────────────────────────────────────────────────────────
+DEVICE_IP=$(hostname -I | awk '{print $1}')
 
 log ""
 log "=========================================="
 log "  Setup complete!"
 log "=========================================="
 log ""
-log "To start with Docker:"
-log "  docker compose up -d"
+log "Start the server:"
+log "  bash start.sh"
 log ""
-log "To start without Docker (dev mode):"
-log "  source .venv/bin/activate"
-log "  uvicorn api.main:app --host 0.0.0.0 --port 8000"
+log "Or run in background:"
+log "  nohup bash start.sh > server.log 2>&1 &"
 log ""
-log "Then from FlowCut, set API URL to:"
-log "  http://$(hostname -I | awk '{print $1}'):8000/v1"
+log "Then in FlowCut, set API URL to:"
+log "  http://${DEVICE_IP}:8000/v1"
+log ""
+log "Health check:"
+log "  curl http://${DEVICE_IP}:8000/health"
 log ""

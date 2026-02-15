@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/health")
 async def health(request: Request):
-    """Health check — shows model status and GPU info."""
+    """Health check — shows NanoVLM status and GPU info."""
     manager = request.app.state.model_manager
 
     gpu_info = {}
@@ -28,8 +28,9 @@ async def health(request: Request):
     return {
         "status": "ok" if manager.is_loaded else ("error" if getattr(manager, "load_error", None) else "loading"),
         "error": getattr(manager, "load_error", None),
+        "model": getattr(manager, "model_id", "unknown"),
         "models_loaded": manager.is_loaded,
         "available_models": [m["id"] for m in manager.available_models()],
         "gpu": gpu_info,
-        "platform": "NVIDIA Jetson AGX Orin (ASUS Ascent GX10)",
+        "platform": "NVIDIA GB10 (ASUS Ascent GX10)",
     }

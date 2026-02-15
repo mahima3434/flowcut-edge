@@ -1,6 +1,6 @@
 """
 OpenAI-compatible /v1/chat/completions endpoint.
-Routes to Phi-3.5 Vision or Nemotron-Mini (text) based on message content.
+Routes all requests to NanoVLM (VILA-1.5-3B) for both vision and text.
 """
 
 import time
@@ -36,9 +36,9 @@ class ToolDef(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "nemotron-mini-4b"
+    model: str = "nanovlm"
     messages: List[ChatMessage]
-    max_tokens: Optional[int] = 2048
+    max_tokens: Optional[int] = 1024
     temperature: Optional[float] = 0.7
     tools: Optional[List[ToolDef]] = None
     tool_choice: Optional[Any] = None
@@ -82,50 +82,42 @@ def _has_images(messages: List[ChatMessage]) -> bool:
 
 @router.post("/chat/completions")
 async def chat_completions(req: ChatCompletionRequest, request: Request):
-    """OpenAI-compatible chat completions endpoint."""
+    """OpenAI-compatible chat completions — routes to NanoVLM."""
     manager = request.app.state.model_manager
 
     if not manager.is_loaded:
-        raise HTTPException(503, "Models are still loading, please wait...")
+        raise HTTPException(503, "NanoVLM is still loading, please wait...")
 
     if req.stream:
         raise HTTPException(501, "Streaming not yet supported")
 
-    # Convert Pydantic messages to dicts
     messages = [m.model_dump(exclude_none=True) for m in req.messages]
-
-    # Route to vision or text model
-    use_vision = _has_images(req.messages) or req.model.startswith("phi-3")
+    use_vision = _has_images(req.messages)
 
     try:
         if use_vision:
-            logger.info("Routing to Phi-3.5 Vision — %d messages", len(messages))
+            logger.info("NanoVLM vision request — %d messages", len(messages))
             result = await manager.generate_vision(
                 messages=messages,
-                max_tokens=req.max_tokens or 2048,
+                max_tokens=req.max_tokens or 1024,
                 temperature=req.temperature or 0.7,
             )
-            model_name = "phi-3.5-vision"
         else:
-            logger.info("Routing to Nemotron-Mini (text) — %d messages", len(messages))
-            tools_raw = None
-            if req.tools:
-                tools_raw = [t.model_dump() for t in req.tools]
+            logger.info("NanoVLM text request — %d messages", len(messages))
             result = await manager.generate_text(
                 messages=messages,
-                max_tokens=req.max_tokens or 2048,
+                max_tokens=req.max_tokens or 1024,
                 temperature=req.temperature or 0.7,
-                tools=tools_raw,
+                tools=[t.model_dump() for t in req.tools] if req.tools else None,
             )
-            model_name = "nemotron-mini-4b"
     except Exception as e:
         logger.error("Generation failed: %s", e, exc_info=True)
         raise HTTPException(500, f"Generation failed: {e}")
 
-    response = ChatCompletionResponse(
+    return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
         created=int(time.time()),
-        model=model_name,
+        model="nanovlm",
         choices=[
             ChatChoice(
                 message={
@@ -137,5 +129,3 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         ],
         usage=Usage(),
     )
-
-    return response
