@@ -19,9 +19,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("flowcut-edge")
 
 # Model paths (set by docker-compose or setup.sh)
-TEXT_MODEL = os.getenv("TEXT_MODEL", "nvidia/Nemotron-Mini-4B-Instruct")
-VISION_MODEL = os.getenv("VISION_MODEL", "microsoft/Phi-3.5-vision-instruct")
-VIDEO_MODEL = os.getenv("VIDEO_MODEL", "2B/post-trained")
+VIDEO_MODEL = os.getenv("VIDEO_MODEL", "2B/pre-trained")
 
 # Auto-detect CUDA, fall back to CPU
 import torch as _torch
@@ -33,16 +31,28 @@ DEVICE = os.getenv("DEVICE", _default_device)
 async def lifespan(app: FastAPI):
     """Load models on startup, release on shutdown."""
     logger.info("=== FlowCut Edge starting on NVIDIA GB10 ===")
-    logger.info(f"Text model:   {TEXT_MODEL}")
-    logger.info(f"Vision model: {VISION_MODEL}")
     logger.info(f"Video model:  {VIDEO_MODEL}")
     logger.info(f"Device:       {DEVICE}")
+    logger.info("Text/Vision models disabled.")
 
     # Lazy import so the app can still start if deps are missing
     try:
         from api.model_manager import ModelManager
         manager = ModelManager()
-        await manager.load_models(TEXT_MODEL, VISION_MODEL, DEVICE)
+        await manager.load_models("disabled", "disabled", DEVICE)
+    except Exception as e:
+        logger.exception("CRITICAL: Failed to initialize ModelManager: %s", e)
+        # Create a dummy manager or handled state could be added here, 
+        # but since ModelManager handles its own errors now, this catch is for import/init errors.
+        # We need to ensure app.state.model_manager exists to avoid 500s in endpoints
+        class DummyManager:
+            is_loaded = False
+            load_error = f"Startup failed: {e}"
+            def available_models(self): return []
+            async def unload(self): pass
+        manager = DummyManager()
+        
+    app.state.model_manager = manager
     except Exception as e:
         logger.exception("CRITICAL: Failed to initialize ModelManager: %s", e)
         # Create a dummy manager or handled state could be added here, 

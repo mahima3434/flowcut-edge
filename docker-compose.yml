@@ -16,9 +16,13 @@ services:
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - TEXT_MODEL=nvidia/Nemotron-Mini-4B-Instruct
-      - VISION_MODEL=microsoft/Phi-3.5-vision-instruct
-      # To disable vision model (save memory/startup time): - VISION_MODEL=disabled
+      
+      # Cosmos Video Options:
+      # - "2B/post-trained": Fast, good prompt adherence (Recommended for Edge)
+      # - "14B/post-trained": High quality, requires ~40GB+ VRAM (Recommended for GX10/GB10)
+      # - "2B/base": Raw foundation model, less instruction following (Not recommended)
+      - VIDEO_MODEL=2B/pre-trained
+      
       - DEVICE=cuda
       - HF_HOME=/cache/huggingface
       - TRANSFORMERS_CACHE=/cache/huggingface/hub
